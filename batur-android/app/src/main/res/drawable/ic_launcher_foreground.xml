@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Gelembung chat dengan percikan: asisten yang menjalankan perintah. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M36,34h36a8,8 0,0 1,8 8v20a8,8 0,0 1,-8 8H50l-10,9v-9h-4a8,8 0,0 1,-8 -8V42a8,8 0,0 1,8 -8z" />
+    <path
+        android:fillColor="#00696B"
+        android:pathData="M54,40l3.2,8.8L66,52l-8.8,3.2L54,64l-3.2,-8.8L42,52l8.8,-3.2z" />
+</vector>

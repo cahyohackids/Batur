@@ -1,0 +1,22 @@
+{
+  "name": "batur-api",
+  "version": "1.0.0",
+  "description": "REST API untuk Batur - Asisten AI On-Device (Tugas Akhir Praktikum PPB 2026)",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "db:init": "node src/lib/initDb.js",
+    "test": "node --test test/"
+  },
+  "engines": { "node": ">=18" },
+  "author": "Ahmad Putra Cahyo (21120124140143)",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  }
+}

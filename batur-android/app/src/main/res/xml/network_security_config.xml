@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Batur API berjalan lokal via HTTP (emulator 10.0.2.2 atau IP laptop di hotspot saat demo).
+     IP hotspot berubah-ubah dan domain-config tidak mendukung rentang IP, jadi cleartext diizinkan. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

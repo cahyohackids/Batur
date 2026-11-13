@@ -1,0 +1,173 @@
+### Batur API — koleksi endpoint (VS Code REST Client / IntelliJ HTTP Client)
+### Jalankan server dulu: npm start
+
+@base = http://localhost:3000/api
+@device = demo-device
+
+### Health
+GET {{base}}/health
+
+###
+
+### List semua skill
+GET {{base}}/skills
+
+###
+
+### List skill aktif kategori waktu
+GET {{base}}/skills?category=waktu&active=true
+
+###
+
+### Definisi tool untuk model AI
+GET {{base}}/skills/tools
+
+###
+
+### Detail skill set-alarm
+GET {{base}}/skills/set-alarm
+
+###
+
+### Toggle skill: nonaktifkan
+PATCH {{base}}/skills/set-alarm
+Content-Type: application/json
+
+{ "is_active": false }
+
+###
+
+### Toggle skill: aktifkan kembali
+PATCH {{base}}/skills/set-alarm
+Content-Type: application/json
+
+{ "is_active": true }
+
+###
+
+### List model
+GET {{base}}/models
+
+###
+
+### Detail model
+GET {{base}}/models/cloud-gateway
+
+###
+
+### Proses perintah alarm (fallback parser)
+POST {{base}}/agent/cloud
+Content-Type: application/json
+
+{
+  "command": "Bangunin aku jam 5 subuh",
+  "device_id": "{{device}}"
+}
+
+###
+
+### Proses perintah timer
+POST {{base}}/agent/cloud
+Content-Type: application/json
+
+{
+  "command": "Set timer 25 menit",
+  "device_id": "{{device}}"
+}
+
+###
+
+### Proses perintah catatan
+POST {{base}}/agent/cloud
+Content-Type: application/json
+
+{
+  "command": "Catat: beli susu dan telur besok",
+  "device_id": "{{device}}"
+}
+
+###
+
+### Proses perintah WhatsApp
+POST {{base}}/agent/cloud
+Content-Type: application/json
+
+{
+  "command": "wa ke 081234567890 bilang Halo, aku sudah sampai",
+  "device_id": "{{device}}"
+}
+
+###
+
+### Proses perintah maps
+POST {{base}}/agent/cloud
+Content-Type: application/json
+
+{
+  "command": "Navigasi ke Universitas Diponegoro Semarang",
+  "device_id": "{{device}}"
+}
+
+###
+
+### Simpan tugas contoh
+POST {{base}}/tasks
+Content-Type: application/json
+
+{
+  "device_id": "{{device}}",
+  "command": "Pasang alarm jam 6 pagi",
+  "mode": "cloud",
+  "skill_slug": "set-alarm",
+  "status": "success",
+  "result_text": "Alarm 06.00 berhasil dipasang.",
+  "latency_ms": 320,
+  "steps": [
+    { "type": "input",        "content": "Pasang alarm jam 6 pagi" },
+    { "type": "tool_call",    "content": "set_alarm(hour=6, minute=0)" },
+    { "type": "confirmation", "content": "Pengguna menyetujui" },
+    { "type": "execution",    "content": "AlarmClock.ACTION_SET_ALARM" },
+    { "type": "response",     "content": "Alarm 06.00 berhasil dipasang." }
+  ]
+}
+
+###
+
+### List riwayat
+GET {{base}}/tasks?device_id={{device}}
+
+###
+
+### Statistik tugas
+GET {{base}}/tasks/stats?device_id={{device}}
+
+###
+
+### Detail tugas (ganti 1 dengan id nyata)
+GET {{base}}/tasks/1
+
+###
+
+### Hapus tugas (ganti 1 dengan id nyata)
+DELETE {{base}}/tasks/1
+
+###
+
+### Simpan catatan
+POST {{base}}/notes
+Content-Type: application/json
+
+{
+  "device_id": "{{device}}",
+  "content": "Beli susu dan telur besok"
+}
+
+###
+
+### List catatan
+GET {{base}}/notes?device_id={{device}}
+
+###
+
+### Hapus catatan (ganti 1 dengan id nyata)
+DELETE {{base}}/notes/1

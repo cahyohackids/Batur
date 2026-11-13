@@ -1,0 +1,38 @@
+# Rahasia: jangan pernah di-commit
+.env
+.env.*
+!.env.example
+keystore.properties
+*.keystore
+*.jks
+
+# File model AI (ratusan MB sampai GB, diunduh dari app)
+*.litertlm
+*.task
+*.tflite
+
+# APK hasil build (diunggah ke GitHub Releases, bukan ke repo)
+*.apk
+*.aab
+release/
+
+# Node
+node_modules/
+*.log
+
+# Android / Gradle
+local.properties
+.gradle/
+.kotlin/
+build/
+.cxx/
+.externalNativeBuild/
+captures/
+*.iml
+.idea/
+
+# Sistem
+.DS_Store
+
+# Dokumen kerja pribadi (tidak ikut repo)
+/*_SPEC.md
