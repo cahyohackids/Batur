@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Batur API berjalan lokal via HTTP (emulator 10.0.2.2 atau IP laptop di hotspot saat demo).
-     IP hotspot berubah-ubah dan domain-config tidak mendukung rentang IP, jadi cleartext diizinkan. -->
+<!-- Build release hanya boleh HTTPS. Build debug punya override di src/debug yang mengizinkan
+     HTTP ke backend lokal (emulator 10.0.2.2 atau IP laptop di hotspot). -->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="true">
+    <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>

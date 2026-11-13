@@ -68,3 +68,16 @@ test('kata "jadwal" tidak salah terdeteksi sebagai WhatsApp', () => {
   const r = call('jadwal kirim laporan besok jam 8 pagi');
   assert.equal(r.skill, 'create-event');
 });
+
+// v1.1: kasus yang dulu salah
+test('alarm: jam 12 malam = 00.00', () => expectTool('Alarm jam 12 malam', 'set-alarm', 'set_alarm', { hour: 0, minute: 0 }));
+test('alarm: jam 2 malam = dini hari', () => expectTool('Bangunin aku jam 2 malam', 'set-alarm', 'set_alarm', { hour: 2, minute: 0 }));
+test('kalender: jam 12 tengah malam', () => expectTool('Rapat jam 12 tengah malam', 'create-event', 'create_calendar_event', { start_time: '00:00' }));
+test('whatsapp: "Tulis WA ..." bukan catatan', () => {
+  const r = expectTool('Tulis WA ucapan terima kasih ke asisten', 'draft-whatsapp', 'draft_whatsapp', { message: 'ucapan terima kasih ke asisten' });
+  assert.equal(r.function_call.arguments.phone, undefined);
+});
+test('whatsapp: nomor + tulis', () => expectTool('Kirim WA ke 08123456789 tulis aku telat', 'draft-whatsapp', 'draft_whatsapp', { phone: '628123456789', message: 'aku telat' }));
+test('catatan: tulis catatan', () => expectTool('Tulis catatan beli galon', 'save-note', 'save_note', { content: 'beli galon' }));
+test('timer: lebih dari 24 jam ditolak', () => assert.equal(call('Timer 48 jam').type, 'text'));
+test('kalender: 31 februari ditolak', () => assert.equal(call('Rapat 31 februari jam 9 pagi').type, 'text'));

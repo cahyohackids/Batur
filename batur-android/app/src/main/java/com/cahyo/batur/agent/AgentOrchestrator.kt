@@ -8,6 +8,7 @@ import com.cahyo.batur.agent.executor.InvalidArgumentsException
 import com.cahyo.batur.agent.executor.PreparedAction
 import com.cahyo.batur.agent.executor.SkillExecutors
 import com.cahyo.batur.data.prefs.SettingsStore
+import com.cahyo.batur.data.remote.ApiException
 import com.cahyo.batur.data.remote.CreateTaskRequest
 import com.cahyo.batur.data.remote.FunctionCall
 import com.cahyo.batur.data.remote.SkillSummary
@@ -35,6 +36,11 @@ internal fun stripMarkdown(text: String): String = text
     .trim()
 
 private val DURATION_PART = Regex("""(\d+(?:[.,]\d+)?)\s*(jam|menit|mnt|detik|dtk)\b""", RegexOption.IGNORE_CASE)
+
+/** "Catat: beli susu" -> "beli susu". Hanya bentuk eksplisit dengan titik dua. */
+internal fun explicitNote(text: String): String? =
+    Regex("""^\s*(?:catat(?:an)?|simpan\s+catatan|tulis\s+catatan)\s*:\s*(.+)$""", RegexOption.IGNORE_CASE)
+        .find(text)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
 
 /** "1 jam 30 menit" -> 5400. Null kalau perintah tidak menyebut durasi berangka. */
 internal fun parseDurationSeconds(text: String): Long? {
@@ -64,8 +70,7 @@ class TaskTrace(val command: String) {
         steps += StepRequest(type, content)
     }
 
-    fun toRequest(deviceId: String, status: String, resultText: String?) = CreateTaskRequest(
-        deviceId = deviceId,
+    fun toRequest(status: String, resultText: String?) = CreateTaskRequest(
         command = command,
         mode = mode,
         modelSlug = modelSlug,
@@ -158,7 +163,9 @@ class AgentOrchestrator(
                     }
                 },
                 onFailure = { e ->
-                    trace.add("error", "Model on-device gagal: ${e.message ?: e.javaClass.simpleName}")
+                    if (e !is OnDeviceSkippedException) {
+                        trace.add("error", "Model on-device gagal: ${e.message ?: e.javaClass.simpleName}")
+                    }
                 },
             )
         }
@@ -171,8 +178,19 @@ class AgentOrchestrator(
                 trace.add("response", text)
                 return finish(Decision.Answer(trace, text))
             }
+            explicitNote(command)?.let { content ->
+                trace.add("reasoning", "Server tidak terjangkau; perintah \"Catat:\" dikenali langsung di ponsel.")
+                val local = EngineOutput(
+                    mode = "fallback", modelSlug = null, type = "tool_call",
+                    functionCall = FunctionCall("save_note", JsonObject().apply { addProperty("content", content) }),
+                    skillSlug = "save-note", text = null, latencyMs = 0,
+                )
+                trace.applyEngine(local)
+                (interpret(local, trace) as? Interpretation.Ok)?.let { return finish(it.decision) }
+            }
             onDeviceRejected?.let { return finish(Decision.NotUnderstood(trace, it)) }
-            if (useOnDevice) {
+            // Server terjangkau tapi menolak (misalnya kuota habis): pesan server lebih berguna.
+            if (useOnDevice && (e as? ApiException)?.httpCode == null) {
                 return Result.failure(
                     IllegalStateException("Model on-device belum bisa memproses perintah ini dan server juga tidak terjangkau. Coba kalimat lain atau sambungkan internet."),
                 )
@@ -212,15 +230,18 @@ class AgentOrchestrator(
             return Interpretation.Text(text)
         }
 
-        trace.add("tool_call", formatFunctionCall(call.name, call.arguments))
+        trace.add("tool_call", formatFunctionCall(call.name, call.args))
+        if (call.name == "set_timer" && parseDurationSeconds(trace.command) == null) {
+            return Interpretation.Invalid("Perintah tidak menyebut durasi, jadi bukan perintah timer.")
+        }
         val checked = checkArguments(trace.command, call)
         if (checked !== call) {
-            trace.add("reasoning", "Durasi dari model tidak cocok dengan perintah; dikoreksi menjadi ${checked.arguments?.get("seconds")} detik.")
+            trace.add("reasoning", "Durasi dari model tidak cocok dengan perintah; dikoreksi menjadi ${checked.args?.get("seconds")} detik.")
         }
         val executor = SkillExecutors.find(call.name)
             ?: return Interpretation.Invalid("Skill ${call.name} belum didukung aplikasi ini.")
         val prepared = try {
-            executor.prepare(checked.arguments ?: JsonObject())
+            executor.prepare(checked.args ?: JsonObject())
         } catch (e: InvalidArgumentsException) {
             return Interpretation.Invalid("Argumen dari model tidak lengkap: ${e.message}.")
         }
@@ -246,9 +267,9 @@ class AgentOrchestrator(
     private fun checkArguments(command: String, call: FunctionCall): FunctionCall {
         if (call.name != "set_timer") return call
         val parsed = parseDurationSeconds(command) ?: return call
-        val given = call.arguments?.get("seconds")?.takeIf { it.isJsonPrimitive }?.asDouble?.toLong()
+        val given = call.args?.get("seconds")?.takeIf { it.isJsonPrimitive }?.asDouble?.toLong()
         if (given == parsed) return call
-        val args = (call.arguments?.deepCopy() ?: JsonObject()).apply { addProperty("seconds", parsed) }
+        val args = (call.args?.deepCopy() ?: JsonObject()).apply { addProperty("seconds", parsed) }
         return FunctionCall(call.name, args)
     }
 
@@ -265,7 +286,7 @@ class AgentOrchestrator(
 
     /** Simpan ke Riwayat, atau antrekan di ponsel kalau server tidak terjangkau. */
     suspend fun record(trace: TaskTrace, status: String, resultText: String?): RecordOutcome =
-        taskRepository.record(trace.toRequest(settings.deviceId(), status, resultText))
+        taskRepository.record(trace.toRequest(status, resultText))
 
     private suspend fun skillFor(functionName: String): SkillSummary? {
         if (skills == null) skills = skillRepository.getSkills().getOrNull()
@@ -275,7 +296,7 @@ class AgentOrchestrator(
     private fun describeEngine(output: EngineOutput): String {
         val latency = formatLatency(output.latencyMs)
         return when (output.mode) {
-            "cloud" -> "Diproses mode Cloud lewat Batur API (model ${output.modelSlug}) dalam $latency"
+            "cloud" -> "Diproses mode Cloud lewat Batur API dalam $latency"
             "fallback" -> "Gateway AI tidak tersedia; parser aturan di server dipakai ($latency)"
             OnDeviceAgentEngine.MODE -> buildString {
                 append("Diproses On-device dengan ${output.modelSlug}")

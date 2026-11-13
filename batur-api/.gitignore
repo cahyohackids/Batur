@@ -1,5 +1,7 @@
 node_modules/
 .env
+# Cache audio TTS
+.cache/
 *.log
 .DS_Store
 # File model on-device jangan ikut di-push (ukuran besar)

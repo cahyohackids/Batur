@@ -5,6 +5,8 @@ import android.content.Context
 import android.net.Uri
 import android.os.StatFs
 import androidx.core.content.edit
+import com.cahyo.batur.data.prefs.ActiveModel
+import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -28,7 +30,11 @@ sealed interface LocalModelState {
 
     data class Ready(val file: File) : LocalModelState
 
-    data class Failed(val message: String) : LocalModelState
+    /**
+     * @param fromDownload true kalau DownloadManager melaporkan gagal: status ini bertahan sampai
+     * pengguna mencoba lagi atau menutupnya. false untuk file yang ukurannya tidak cocok.
+     */
+    data class Failed(val message: String, val fromDownload: Boolean = false) : LocalModelState
 }
 
 /**
@@ -43,6 +49,10 @@ class ModelStore(context: Context) {
     private val downloadManager = appContext.getSystemService(DownloadManager::class.java)
     private val prefs = appContext.getSharedPreferences("model_downloads", Context.MODE_PRIVATE)
 
+    /** Data model yang pernah diunduh, supaya bagian "Di ponsel ini" tetap tampil saat server mati. */
+    private val meta = appContext.getSharedPreferences("model_meta", Context.MODE_PRIVATE)
+    private val gson = Gson()
+
     private val modelsDir: File
         get() = (appContext.getExternalFilesDir(DIR) ?: File(appContext.filesDir, DIR)).apply { mkdirs() }
 
@@ -52,12 +62,12 @@ class ModelStore(context: Context) {
 
     /** File dianggap siap kalau unduhan selesai dan ukurannya cocok dengan data dari API. Panggil di luar main thread. */
     fun readyFile(fileName: String, expectedBytes: Long?): File? =
-        (currentState(fileName, expectedBytes) as? LocalModelState.Ready)?.file
+        (currentStateOf(fileName, expectedBytes) as? LocalModelState.Ready)?.file
 
     /** Pantau status unduhan; berhenti sendiri saat kolektor berhenti. */
     fun observe(fileName: String, expectedBytes: Long?): Flow<LocalModelState> = flow {
         while (true) {
-            emit(currentState(fileName, expectedBytes))
+            emit(currentStateOf(fileName, expectedBytes))
             delay(700)
         }
     }.distinctUntilChanged().flowOn(Dispatchers.IO)
@@ -65,6 +75,7 @@ class ModelStore(context: Context) {
     /** @return pesan kesalahan, atau null kalau unduhan berhasil dimulai. */
     fun startDownload(url: String, fileName: String, title: String, expectedBytes: Long?): String? {
         if (downloadId(fileName) != null) return null
+        dismissFailure(fileName)
         val needed = (expectedBytes ?: 0L) + SAFETY_MARGIN_BYTES
         if (freeBytes() < needed) {
             return "Ruang kosong tidak cukup. Butuh ${formatBytes(needed)}, tersedia ${formatBytes(freeBytes())}."
@@ -91,14 +102,50 @@ class ModelStore(context: Context) {
     /** Batalkan unduhan yang sedang berjalan atau hapus file yang sudah ada. */
     fun delete(fileName: String) {
         downloadId(fileName)?.let { downloadManager.remove(it) }
-        prefs.edit { remove(fileName) }
+        prefs.edit {
+            remove(fileName)
+            remove(FAILED_PREFIX + fileName)
+        }
         fileFor(fileName).delete()
     }
+
+    /** Tutup pesan unduhan gagal; status kembali ke "Belum diunduh". */
+    fun dismissFailure(fileName: String) {
+        prefs.edit { remove(FAILED_PREFIX + fileName) }
+    }
+
+    /** Simpan data model yang diunduh. [autoActivate] = aktifkan otomatis setelah selesai. */
+    fun remember(model: ActiveModel, autoActivate: Boolean) {
+        meta.edit {
+            putString(model.slug, gson.toJson(model))
+            if (autoActivate) putBoolean(AUTO_PREFIX + model.slug, true) else remove(AUTO_PREFIX + model.slug)
+        }
+    }
+
+    fun forget(slug: String) {
+        meta.edit {
+            remove(slug)
+            remove(AUTO_PREFIX + slug)
+        }
+    }
+
+    fun clearAutoActivate(slug: String) {
+        meta.edit { remove(AUTO_PREFIX + slug) }
+    }
+
+    /** Model yang pernah diunduh di ponsel ini (file bisa saja sudah tidak ada). */
+    fun knownModels(): List<ActiveModel> = meta.all.entries
+        .filter { !it.key.startsWith(AUTO_PREFIX) }
+        .mapNotNull { (it.value as? String)?.let { json -> runCatching { gson.fromJson(json, ActiveModel::class.java) }.getOrNull() } }
+
+    fun autoActivateCandidates(): List<ActiveModel> =
+        knownModels().filter { meta.getBoolean(AUTO_PREFIX + it.slug, false) }
 
     private fun downloadId(fileName: String): Long? =
         prefs.getLong(fileName, -1L).takeIf { it >= 0 }
 
-    private fun currentState(fileName: String, expectedBytes: Long?): LocalModelState {
+    /** Status saat ini; panggil di luar main thread. */
+    fun currentStateOf(fileName: String, expectedBytes: Long?): LocalModelState {
         val id = downloadId(fileName)
         if (id != null) {
             downloadManager.query(DownloadManager.Query().setFilterById(id))?.use { c ->
@@ -118,8 +165,12 @@ class ModelStore(context: Context) {
                         DownloadManager.STATUS_SUCCESSFUL -> prefs.edit { remove(fileName) }
 
                         DownloadManager.STATUS_FAILED -> {
-                            delete(fileName)
-                            return LocalModelState.Failed("Unduhan gagal (kode $reason). Coba lagi.")
+                            // remove() juga menghapus file setengah jadi; pesannya disimpan sampai pengguna bertindak.
+                            downloadManager.remove(id)
+                            prefs.edit {
+                                remove(fileName)
+                                putString(FAILED_PREFIX + fileName, ModelRequirements.downloadErrorMessage(reason))
+                            }
                         }
                     }
                 } else {
@@ -128,6 +179,7 @@ class ModelStore(context: Context) {
                 }
             }
         }
+        prefs.getString(FAILED_PREFIX + fileName, null)?.let { return LocalModelState.Failed(it, fromDownload = true) }
         val file = fileFor(fileName)
         return when {
             !file.isFile -> LocalModelState.NotDownloaded
@@ -146,6 +198,8 @@ class ModelStore(context: Context) {
 
     companion object {
         private const val DIR = "models"
+        private const val FAILED_PREFIX = "failed:"
+        private const val AUTO_PREFIX = "auto:"
         private const val SAFETY_MARGIN_BYTES = 300L * 1024 * 1024
 
         fun formatBytes(bytes: Long): String {

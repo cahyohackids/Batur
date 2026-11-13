@@ -17,28 +17,29 @@ function normalizeHour(h, suffix) {
   if (suffix === 'pagi' || suffix === 'subuh') return h < 12 ? h : h - 12;
   if (suffix === 'siang') return h === 12 ? 12 : (h < 12 ? h + 12 : h);
   if (suffix === 'sore')  return h < 12 ? h + 12 : h;
-  if (suffix === 'malam') return h < 12 ? h + 12 : h;
-  if (suffix === 'tengah') return 0;
+  // "jam 12 malam" = 00.00, "jam 1/2/3 malam" = dini hari, "jam 7 malam" = 19.00
+  if (suffix === 'malam') return h === 12 ? 0 : (h >= 1 && h <= 3 ? h : (h < 12 ? h + 12 : h));
+  if (suffix === 'tengah malam') return h === 12 ? 0 : h;
   return h;
 }
 
 function parseTime(text) {
   // "jam setengah 6 pagi" = 05.30 (cara umum orang Indonesia menyebut jam X.30)
-  const half = text.match(/(?:jam|pukul)?\s*setengah\s+(\d{1,2})\s*(subuh|pagi|siang|sore|malam)?/i);
+  const half = text.match(/(?:jam|pukul)?\s*setengah\s+(\d{1,2})\s*(subuh|pagi|siang|sore|tengah\s+malam|malam)?/i);
   if (half) {
     const hRaw = Number.parseInt(half[1], 10) - 1;
-    const hour = normalizeHour(hRaw < 0 ? 23 : hRaw, (half[2] ?? '').toLowerCase() || null);
+    const hour = normalizeHour(hRaw < 0 ? 23 : hRaw, (half[2] ?? '').toLowerCase().replace(/\s+/g, ' ') || null);
     if (hour >= 0 && hour <= 23) return { hour, minute: 30 };
   }
 
   // "jam 05.30 pagi", "jam 5 subuh", "pukul 06:30", "5:30 sore", "05.30"
   const m = text.match(
-    /(?:jam|pukul)\s+(\d{1,2})(?:[.:](\d{2}))?\s*(subuh|pagi|siang|sore|malam)?|(\d{1,2})[.:](\d{2})\s*(subuh|pagi|siang|sore|malam)?/i,
+    /(?:jam|pukul)\s+(\d{1,2})(?:[.:](\d{2}))?\s*(subuh|pagi|siang|sore|tengah\s+malam|malam)?|(\d{1,2})[.:](\d{2})\s*(subuh|pagi|siang|sore|tengah\s+malam|malam)?/i,
   );
   if (!m) return null;
   const hRaw  = Number.parseInt(m[1] ?? m[4], 10);
   const min   = Number.parseInt(m[2] ?? m[5] ?? '0', 10);
-  const sfx   = (m[3] ?? m[6] ?? '').toLowerCase();
+  const sfx   = (m[3] ?? m[6] ?? '').toLowerCase().replace(/\s+/g, ' ');
   const hour  = normalizeHour(hRaw, sfx || null);
   if (hour < 0 || hour > 23 || min < 0 || min > 59) return null;
   return { hour, minute: min };
@@ -51,7 +52,12 @@ function getJakartaDate() {
 function parseDate(text) {
   const lower = text.toLowerCase();
   const now = getJakartaDate();
-  if (/\btengah malam\b/.test(lower)) return now;
+  // "jam 12 tengah malam" tanpa tanggal = pergantian hari berikutnya.
+  const hasExplicitDate = /\b(besok|lusa|tanggal)\b/.test(lower)
+    || Object.keys(MONTHS_ID).some((m) => lower.includes(m));
+  if (/\btengah malam\b/.test(lower) && !hasExplicitDate) {
+    const d = new Date(now); d.setDate(d.getDate() + 1); return d;
+  }
   if (/\bbesok\b/.test(lower)) {
     const d = new Date(now); d.setDate(d.getDate() + 1); return d;
   }
@@ -61,14 +67,20 @@ function parseDate(text) {
   // "tanggal 15 desember" or "15 desember" or "tanggal 15"
   const dateM = lower.match(/(?:tanggal\s+)?(\d{1,2})\s+(januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember)/);
   if (dateM) {
-    const d = new Date(now.getFullYear(), MONTHS_ID[dateM[2]] - 1, Number.parseInt(dateM[1], 10));
-    if (d < startOfDay(now)) d.setFullYear(d.getFullYear() + 1);
+    const day = Number.parseInt(dateM[1], 10);
+    const month = MONTHS_ID[dateM[2]] - 1;
+    let d = new Date(now.getFullYear(), month, day);
+    if (d < startOfDay(now)) d = new Date(now.getFullYear() + 1, month, day);
+    // "31 februari" tidak boleh bergeser jadi Maret.
+    if (d.getMonth() !== month || d.getDate() !== day) return null;
     return d;
   }
   const numDateM = lower.match(/tanggal\s+(\d{1,2})/);
   if (numDateM) {
-    const d = new Date(now.getFullYear(), now.getMonth(), Number.parseInt(numDateM[1], 10));
-    if (d < startOfDay(now)) d.setMonth(d.getMonth() + 1);
+    const day = Number.parseInt(numDateM[1], 10);
+    let d = new Date(now.getFullYear(), now.getMonth(), day);
+    if (d < startOfDay(now)) d = new Date(now.getFullYear(), now.getMonth() + 1, day);
+    if (day < 1 || d.getDate() !== day) return null;
     return d;
   }
   return now;
@@ -120,6 +132,9 @@ function parse(command) {
     if (jM) seconds += Number.parseInt(jM[1], 10) * 3600;
     if (mM) seconds += Number.parseInt(mM[1], 10) * 60;
     if (sM) seconds += Number.parseInt(sM[1], 10);
+    if (seconds > 86400) {
+      return { type: 'text', text: 'Timer maksimal 24 jam. Untuk waktu yang lebih lama, pakai alarm atau jadwal.', mode: 'fallback' };
+    }
     if (seconds > 0) {
       return {
         type: 'tool_call',
@@ -130,23 +145,26 @@ function parse(command) {
     }
   }
 
-  // ── 3. Catatan ──────────────────────────────────────────────────────────────
-  const noteM = command.match(/(?:catat|simpan\s+catatan|tulis(?:\s+catatan)?)\s*[:\-]?\s*(.+)/i);
-  if (noteM && noteM[1].trim()) {
+  // ── 3. Catatan eksplisit ("Catat: ...") ─────────────────────────────────────
+  const explicitNote = command.match(/^\s*(?:catat(?:an)?|simpan\s+catatan|tulis\s+catatan)\s*:\s*(.+)/i);
+  if (explicitNote && explicitNote[1].trim()) {
     return {
       type: 'tool_call',
       skill: 'save-note',
-      function_call: { name: 'save_note', arguments: { content: noteM[1].trim() } },
+      function_call: { name: 'save_note', arguments: { content: explicitNote[1].trim() } },
       mode: 'fallback',
     };
   }
 
   // ── 4. WhatsApp ─────────────────────────────────────────────────────────────
-  const waM = command.match(/\bwa\b.*?(?:ke|to)\s+([\d+]+).*?(?:bilang|kirim|katakan|tulis)\s+(.+)/i)
-           ?? command.match(/\b(?:wa|whatsapp)\b.*?(?:bilang|kirim|tulis|katakan)\s+(.+)/i);
+  const waM = command.match(/\b(?:wa|whatsapp)\b.*?(?:ke|to)\s+([\d+]+).*?(?:bilang|kirim|katakan|tulis)\s+(.+)/i)
+           ?? command.match(/\b(?:wa|whatsapp)\b.*?(?:bilang|kirim|tulis|katakan)\s+(.+)/i)
+           ?? command.match(/^\s*(?:tolong\s+)?(?:tulis|kirim|bikin(?:in)?|buat(?:kan|in)?)\s+(?:pesan\s+)?(?:wa|whatsapp)\b\s*[:\-]?\s*(.+)/i);
   if (waM) {
-    const phone   = waM[1]?.replace(/^0/, '62') ?? undefined;
-    const message = (waM[2] ?? waM[1]).trim();
+    // Pola pertama punya dua grup (nomor, pesan); pola lain hanya pesan.
+    const hasPhone = waM[2] !== undefined;
+    const phone   = hasPhone ? waM[1].replace(/^0/, '62') : undefined;
+    const message = (hasPhone ? waM[2] : waM[1]).trim();
     return {
       type: 'tool_call',
       skill: 'draft-whatsapp',
@@ -173,6 +191,9 @@ function parse(command) {
     const timeInfo = parseTime(command);
     const date     = parseDate(command);
     const title    = extractEventTitle(command);
+    if (timeInfo && !date) {
+      return { type: 'text', text: 'Tanggalnya tidak valid. Coba sebut tanggal yang benar, misalnya "15 Desember".', mode: 'fallback' };
+    }
     if (timeInfo) {
       return {
         type: 'tool_call',
@@ -188,6 +209,17 @@ function parse(command) {
         mode: 'fallback',
       };
     }
+  }
+
+  // ── 7. Catatan ──────────────────────────────────────────────────────────────
+  const noteM = command.match(/^\s*(?:tolong\s+)?(?:catat(?:kan)?|simpan\s+catatan|tulis(?:\s+catatan)?)\b\s*[:\-]?\s*(.+)/i);
+  if (noteM && noteM[1].trim()) {
+    return {
+      type: 'tool_call',
+      skill: 'save-note',
+      function_call: { name: 'save_note', arguments: { content: noteM[1].trim() } },
+      mode: 'fallback',
+    };
   }
 
   return {

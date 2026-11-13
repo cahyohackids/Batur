@@ -2,7 +2,16 @@
 ### Jalankan server dulu: npm start
 
 @base = http://localhost:3000/api
-@device = demo-device
+@token = {{register.response.body.data.token}}
+
+### Daftarkan perangkat (jalankan sekali; token dipakai request lain)
+# @name register
+POST {{base}}/devices/register
+Content-Type: application/json
+
+{}
+
+###
 
 ### Health
 GET {{base}}/health
@@ -31,6 +40,7 @@ GET {{base}}/skills/set-alarm
 
 ### Toggle skill: nonaktifkan
 PATCH {{base}}/skills/set-alarm
+Authorization: Bearer {{token}}
 Content-Type: application/json
 
 { "is_active": false }
@@ -39,6 +49,7 @@ Content-Type: application/json
 
 ### Toggle skill: aktifkan kembali
 PATCH {{base}}/skills/set-alarm
+Authorization: Bearer {{token}}
 Content-Type: application/json
 
 { "is_active": true }
@@ -57,65 +68,65 @@ GET {{base}}/models/cloud-gateway
 
 ### Proses perintah alarm (fallback parser)
 POST {{base}}/agent/cloud
+Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
-  "command": "Bangunin aku jam 5 subuh",
-  "device_id": "{{device}}"
+  "command": "Bangunin aku jam 5 subuh"
 }
 
 ###
 
 ### Proses perintah timer
 POST {{base}}/agent/cloud
+Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
-  "command": "Set timer 25 menit",
-  "device_id": "{{device}}"
+  "command": "Set timer 25 menit"
 }
 
 ###
 
 ### Proses perintah catatan
 POST {{base}}/agent/cloud
+Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
-  "command": "Catat: beli susu dan telur besok",
-  "device_id": "{{device}}"
+  "command": "Catat: beli susu dan telur besok"
 }
 
 ###
 
 ### Proses perintah WhatsApp
 POST {{base}}/agent/cloud
+Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
-  "command": "wa ke 081234567890 bilang Halo, aku sudah sampai",
-  "device_id": "{{device}}"
+  "command": "wa ke 081234567890 bilang Halo, aku sudah sampai"
 }
 
 ###
 
 ### Proses perintah maps
 POST {{base}}/agent/cloud
+Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
-  "command": "Navigasi ke Universitas Diponegoro Semarang",
-  "device_id": "{{device}}"
+  "command": "Navigasi ke Universitas Diponegoro Semarang"
 }
 
 ###
 
 ### Simpan tugas contoh
 POST {{base}}/tasks
+Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
-  "device_id": "{{device}}",
   "command": "Pasang alarm jam 6 pagi",
   "mode": "cloud",
   "skill_slug": "set-alarm",
@@ -134,40 +145,58 @@ Content-Type: application/json
 ###
 
 ### List riwayat
-GET {{base}}/tasks?device_id={{device}}
+GET {{base}}/tasks
+Authorization: Bearer {{token}}
 
 ###
 
 ### Statistik tugas
-GET {{base}}/tasks/stats?device_id={{device}}
+GET {{base}}/tasks/stats
+Authorization: Bearer {{token}}
 
 ###
 
 ### Detail tugas (ganti 1 dengan id nyata)
 GET {{base}}/tasks/1
+Authorization: Bearer {{token}}
 
 ###
 
 ### Hapus tugas (ganti 1 dengan id nyata)
 DELETE {{base}}/tasks/1
+Authorization: Bearer {{token}}
 
 ###
 
 ### Simpan catatan
 POST {{base}}/notes
+Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
-  "device_id": "{{device}}",
   "content": "Beli susu dan telur besok"
 }
 
 ###
 
 ### List catatan
-GET {{base}}/notes?device_id={{device}}
+GET {{base}}/notes
+Authorization: Bearer {{token}}
 
 ###
 
 ### Hapus catatan (ganti 1 dengan id nyata)
 DELETE {{base}}/notes/1
+Authorization: Bearer {{token}}
+
+###
+
+### Bacakan teks (balasan audio/mpeg; header X-TTS-Cache: hit/miss)
+POST {{base}}/tts
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "text": "Alarm jam 6 pagi sudah dipasang.",
+  "voice": "laki-laki"
+}

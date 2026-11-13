@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
@@ -62,6 +63,7 @@ fun ModelDetailScreen(
     viewModel: ModelDetailViewModel = viewModel(factory = AppViewModelProvider.Factory),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val target by viewModel.target.collectAsStateWithLifecycle()
     val local by viewModel.localState.collectAsStateWithLifecycle()
     val isActive by viewModel.isActive.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
@@ -74,27 +76,61 @@ fun ModelDetailScreen(
         }
     }
 
+    val localSection: @Composable () -> Unit = {
+        val t = target
+        val l = local
+        if (t != null && l != null) {
+            LocalModelSection(
+                target = t,
+                local = l,
+                isActive = isActive,
+                freeBytes = viewModel::freeBytes,
+                ramCheck = viewModel::ramCheck,
+                onDownload = viewModel::download,
+                onDismissFailure = viewModel::dismissFailure,
+                onDelete = viewModel::delete,
+                onActivate = viewModel::activate,
+                onDeactivate = viewModel::deactivate,
+            )
+        }
+    }
+
     BaturScaffold(title = "Detail Model", onBack = onBack, snackbarHost = { SnackbarHost(snackbar) }) { padding ->
         Box(Modifier.padding(padding)) {
             when (val s = state) {
                 UiState.Loading, UiState.Empty -> LoadingView()
-                is UiState.Error -> ErrorView(s.message, onRetry = viewModel::load)
-                is UiState.Success -> ModelDetailContent(s.data) {
-                    local?.let { l ->
-                        LocalModelSection(
-                            model = s.data,
-                            local = l,
-                            isActive = isActive,
-                            freeBytes = viewModel::freeBytes,
-                            onDownload = viewModel::download,
-                            onDelete = viewModel::delete,
-                            onActivate = viewModel::activate,
-                            onDeactivate = viewModel::deactivate,
-                        )
-                    }
+                is UiState.Error -> {
+                    val t = target
+                    if (t == null) ErrorView(s.message, onRetry = viewModel::load)
+                    else OfflineModelContent(t, s.message, onRetry = viewModel::load, localSection = localSection)
                 }
+                is UiState.Success -> ModelDetailContent(s.data, localSection)
             }
         }
+    }
+}
+
+/** Server tidak terjangkau, tapi file model ada di ponsel: tetap bisa dinonaktifkan atau dihapus. */
+@Composable
+private fun OfflineModelContent(target: LocalTarget, message: String, onRetry: () -> Unit, localSection: @Composable () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        Text(target.model.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(4.dp))
+        Tag("On-device")
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "Detail model belum bisa dimuat ($message). Kamu tetap bisa mengelola file di ponsel ini.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        TextButton(onClick = onRetry) { Text("Coba lagi") }
+        localSection()
+        Spacer(Modifier.height(24.dp))
     }
 }
 
@@ -144,10 +180,6 @@ private fun ModelDetailContent(model: ModelDetail, localSection: @Composable () 
                 SpecRow("Ukuran", model.sizeLabel ?: "-")
                 SpecDivider()
                 SpecRow("Kebutuhan RAM", model.ramLabel ?: "-")
-                if (!onDevice) {
-                    SpecDivider()
-                    SpecRow("Model di gateway", model.gatewayModel ?: "-")
-                }
             }
         }
 
@@ -177,18 +209,23 @@ private fun SpecDivider() = HorizontalDivider(color = MaterialTheme.colorScheme.
 /** Bagian "Di ponsel ini": unduh, pantau, aktifkan, atau hapus file model .litertlm. */
 @Composable
 private fun LocalModelSection(
-    model: ModelDetail,
+    target: LocalTarget,
     local: LocalModelState,
     isActive: Boolean,
     freeBytes: () -> Long,
+    ramCheck: () -> RamCheck?,
     onDownload: () -> Unit,
+    onDismissFailure: () -> Unit,
     onDelete: () -> Unit,
     onActivate: () -> Unit,
     onDeactivate: () -> Unit,
 ) {
     var confirmDownload by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
-    val size = model.sizeBytes?.let(ModelStore::formatBytes) ?: model.sizeLabel ?: "-"
+    val model = target.model
+    val size = model.sizeBytes?.let(ModelStore::formatBytes) ?: target.sizeLabel ?: "-"
+    val ram = remember(target) { ramCheck() }
+    val canDownload = target.downloadUrl != null
 
     SectionTitle("Di ponsel ini", Modifier.padding(top = 16.dp))
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
@@ -196,7 +233,8 @@ private fun LocalModelSection(
             when (local) {
                 LocalModelState.NotDownloaded -> {
                     Text("Belum diunduh. File $size disimpan di folder aplikasi dan hanya perlu diunduh sekali.", style = MaterialTheme.typography.bodyMedium)
-                    Button(onClick = { confirmDownload = true }) {
+                    if (ram != null && !ram.enough) RamWarning(ram.warning)
+                    Button(onClick = { confirmDownload = true }, enabled = canDownload) {
                         Icon(Icons.Outlined.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
                         Text("Unduh ($size)")
@@ -214,7 +252,7 @@ private fun LocalModelSection(
                     if (progress != null) LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
                     else LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     Text(
-                        "Unduhan tetap jalan walau aplikasi ditutup. Lihat juga notifikasi.",
+                        "Unduhan tetap jalan walau aplikasi ditutup, dan model langsung dipakai kalau belum ada model aktif.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -233,6 +271,7 @@ private fun LocalModelSection(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (!isActive && ram != null && !ram.enough) RamWarning(ram.warning)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (isActive) OutlinedButton(onClick = onDeactivate) { Text("Nonaktifkan") }
                         else Button(onClick = onActivate) { Text("Jadikan model aktif") }
@@ -243,8 +282,11 @@ private fun LocalModelSection(
                 is LocalModelState.Failed -> {
                     Text(local.message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { confirmDownload = true }) { Text("Unduh ulang") }
-                        TextButton(onClick = onDelete) { Text("Hapus") }
+                        if (canDownload) {
+                            Button(onClick = { confirmDownload = true }) { Text(if (local.fromDownload) "Coba lagi" else "Unduh ulang") }
+                        }
+                        if (local.fromDownload) TextButton(onClick = onDismissFailure) { Text("Tutup") }
+                        else TextButton(onClick = onDelete) { Text("Hapus") }
                     }
                 }
             }
@@ -253,20 +295,24 @@ private fun LocalModelSection(
 
     if (confirmDownload) {
         val free = remember { ModelStore.formatBytes(freeBytes()) }
+        val lowRam = ram != null && !ram.enough
         AlertDialog(
             onDismissRequest = { confirmDownload = false },
             title = { Text("Unduh ${model.name}?") },
             text = {
-                Text(
-                    "Ukuran file $size dari Hugging Face (litert-community). Sebaiknya pakai Wi-Fi. " +
-                        "Ruang kosong saat ini $free. Kebutuhan memori: ${model.ramLabel ?: "-"}.",
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Ukuran file $size dari Hugging Face (litert-community). Sebaiknya pakai Wi-Fi. " +
+                            "Ruang kosong saat ini $free. Kebutuhan memori: ${target.ramLabel ?: "-"}.",
+                    )
+                    if (lowRam) RamWarning(ram.warning)
+                }
             },
             confirmButton = {
                 TextButton(onClick = {
                     confirmDownload = false
                     onDownload()
-                }) { Text("Unduh") }
+                }) { Text(if (lowRam) "Tetap unduh" else "Unduh") }
             },
             dismissButton = { TextButton(onClick = { confirmDownload = false }) { Text("Batal") } },
         )
@@ -290,5 +336,18 @@ private fun LocalModelSection(
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Batal") } },
         )
+    }
+}
+
+@Composable
+private fun RamWarning(text: String) {
+    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Icon(
+            Icons.Outlined.WarningAmber,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(18.dp),
+        )
+        Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
     }
 }

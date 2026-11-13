@@ -7,7 +7,8 @@ import com.cahyo.batur.data.remote.SkillDetail
 import com.cahyo.batur.data.repository.SkillRepository
 import com.cahyo.batur.ui.common.UiState
 import com.cahyo.batur.ui.common.toState
-import com.google.gson.JsonObject
+import com.cahyo.batur.data.remote.asObjectOrNull
+import com.google.gson.JsonElement
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -67,15 +68,17 @@ class SkillDetailViewModel(
     }
 }
 
-fun parseParameters(schema: JsonObject?): List<ParamInfo> {
-    val properties = schema?.getAsJsonObject("properties") ?: return emptyList()
-    val required = schema.getAsJsonArray("required")?.map { it.asString }?.toSet().orEmpty()
+fun parseParameters(parameters: JsonElement?): List<ParamInfo> {
+    val schema = parameters.asObjectOrNull() ?: return emptyList()
+    val properties = schema.get("properties").asObjectOrNull() ?: return emptyList()
+    val required = schema.get("required")?.takeIf { it.isJsonArray }?.asJsonArray
+        ?.mapNotNull { it.takeIf { e -> e.isJsonPrimitive }?.asString }?.toSet().orEmpty()
     return properties.entrySet().map { (name, element) ->
-        val prop = element.asJsonObject
+        val prop = element.asObjectOrNull()
         ParamInfo(
             name = name,
-            type = prop.get("type")?.asString ?: "-",
-            description = prop.get("description")?.asString.orEmpty(),
+            type = prop?.get("type")?.takeIf { it.isJsonPrimitive }?.asString ?: "-",
+            description = prop?.get("description")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty(),
             required = name in required,
         )
     }

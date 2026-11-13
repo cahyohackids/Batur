@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 ke bawah. Token perangkat, ID perangkat, dan alamat server (DataStore) tidak ikut
+     dicadangkan supaya tidak terpasang di HP lain; id unduhan dan file model juga khusus perangkat ini. -->
+<full-backup-content>
+    <exclude domain="file" path="datastore/" />
+    <exclude domain="sharedpref" path="model_downloads.xml" />
+    <exclude domain="sharedpref" path="model_meta.xml" />
+    <exclude domain="external" path="models/" />
+</full-backup-content>

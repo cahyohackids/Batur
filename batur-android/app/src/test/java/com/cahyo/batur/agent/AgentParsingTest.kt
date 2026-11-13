@@ -23,13 +23,13 @@ class AgentParsingTest {
             tools,
         )
         assertEquals("set_timer", call?.name)
-        assertEquals(15000L, call?.arguments?.get("seconds")?.asLong)
+        assertEquals(15000L, call?.args?.get("seconds")?.asLong)
 
         val fenced = OnDeviceAgentEngine.parseTextToolCall(
             "```json\n{\"name\":\"set_alarm\",\"arguments\":{\"hour\":5.0,\"minute\":30}}\n```",
             tools,
         )
-        assertEquals("5", fenced?.arguments?.get("hour")?.toString())
+        assertEquals("5", fenced?.args?.get("hour")?.toString())
 
         assertNull(OnDeviceAgentEngine.parseTextToolCall("{\"name\":\"hapus_semua\",\"arguments\":{}}", tools))
         assertNull(OnDeviceAgentEngine.parseTextToolCall("RAM itu memori sementara.", tools))
@@ -38,5 +38,13 @@ class AgentParsingTest {
     @Test
     fun blokThinkingDibuang() {
         assertEquals("Halo", OnDeviceAgentEngine.stripThinking("<think>\nhmm\n</think>\nHalo"))
+    }
+
+    @Test
+    fun catatanEksplisit() {
+        assertEquals("bayar kos tanggal 20", explicitNote("Catat: bayar kos tanggal 20"))
+        assertEquals("beli galon", explicitNote("tulis catatan : beli galon"))
+        assertNull(explicitNote("catat jadwal rapat besok"))
+        assertNull(explicitNote("Catat:   "))
     }
 }

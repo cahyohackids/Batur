@@ -20,6 +20,8 @@ sealed class Screen(val route: String) {
     data object History : Screen("history")
     data object Models : Screen("models")
     data object Profile : Screen("profile")
+    data object Notes : Screen("notes")
+    data object Onboarding : Screen("onboarding")
 
     data object SkillDetail : Screen("skill/{slug}") {
         fun createRoute(slug: String) = "skill/$slug"
@@ -54,7 +56,7 @@ enum class BottomTab(
             route.startsWith("skill") -> SKILLS
             route.startsWith("history") -> HISTORY
             route.startsWith("model") -> MODELS
-            route == Screen.Profile.route -> PROFILE
+            route == Screen.Profile.route || route == Screen.Notes.route -> PROFILE
             else -> null
         }
     }

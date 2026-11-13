@@ -1,7 +1,6 @@
 package com.cahyo.batur.data.repository
 
 import com.cahyo.batur.data.prefs.SettingsStore
-import com.cahyo.batur.data.remote.ApiClient
 import com.cahyo.batur.data.remote.ApiException
 import com.cahyo.batur.data.remote.CreateTaskRequest
 import com.cahyo.batur.data.remote.CreatedTask
@@ -9,11 +8,11 @@ import com.cahyo.batur.data.remote.DeleteResult
 import com.cahyo.batur.data.remote.TaskDetail
 import com.cahyo.batur.data.remote.TaskStats
 import com.cahyo.batur.data.remote.TaskSummary
-import com.cahyo.batur.data.remote.apiCall
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.UUID
 
 sealed interface RecordOutcome {
     data class Saved(val id: Int) : RecordOutcome
@@ -22,40 +21,37 @@ sealed interface RecordOutcome {
 }
 
 class TaskRepository(
-    private val client: ApiClient,
+    private val device: DeviceRepository,
     private val settings: SettingsStore,
+    private val noteRepository: NoteRepository,
 ) {
     private val gson = Gson()
     private val queueMutex = Mutex()
 
     suspend fun getTasks(status: String? = null): Result<List<TaskSummary>> {
         syncPending()
-        val deviceId = settings.deviceId()
-        return apiCall { client.api().getTasks(deviceId = deviceId, status = status) }
+        return device.authed { getTasks(status = status) }
     }
 
-    suspend fun getStats(): Result<TaskStats> {
-        val deviceId = settings.deviceId()
-        return apiCall { client.api().getTaskStats(deviceId) }
-    }
+    suspend fun getStats(): Result<TaskStats> = device.authed { getTaskStats() }
 
-    suspend fun getTask(id: Int): Result<TaskDetail> =
-        apiCall { client.api().getTask(id) }
+    suspend fun getTask(id: Int): Result<TaskDetail> = device.authed { getTask(id) }
 
-    suspend fun createTask(request: CreateTaskRequest): Result<CreatedTask> =
-        apiCall { client.api().createTask(request) }
+    private suspend fun createTask(request: CreateTaskRequest): Result<CreatedTask> =
+        device.authed { createTask(request) }
 
     /**
-     * Simpan jejak ke server. Kalau server tidak terjangkau (misalnya mode on-device tanpa internet),
-     * jejak diantrekan di ponsel dan dikirim otomatis saat berhasil terhubung lagi.
+     * Simpan jejak ke server. Kalau gagal karena alasan sementara (offline, server sibuk, dibatasi),
+     * jejak diantrekan di ponsel dan dikirim otomatis nanti. client_id membuat kiriman ulang tidak dobel.
      */
     suspend fun record(request: CreateTaskRequest): RecordOutcome {
         syncPending()
-        return createTask(request).fold(
+        val withId = request.copy(clientId = request.clientId ?: UUID.randomUUID().toString())
+        return createTask(withId).fold(
             onSuccess = { RecordOutcome.Saved(it.id) },
             onFailure = { e ->
-                if ((e as? ApiException)?.offline == true) {
-                    queueMutex.withLock { savePending(loadPending() + request) }
+                if ((e as? ApiException)?.retryable == true) {
+                    queueMutex.withLock { savePending(loadPending() + withId) }
                     RecordOutcome.Queued
                 } else {
                     RecordOutcome.Failed(e.message ?: "Riwayat gagal disimpan")
@@ -64,38 +60,42 @@ class TaskRepository(
         )
     }
 
-    /** Kirim jejak yang tertunda. @return jumlah yang berhasil terkirim. */
-    suspend fun syncPending(): Int = queueMutex.withLock {
-        val pending = loadPending()
-        if (pending.isEmpty()) return@withLock 0
-        val remaining = mutableListOf<CreateTaskRequest>()
-        var sent = 0
-        for ((index, request) in pending.withIndex()) {
-            val result = createTask(request)
-            if (result.isSuccess) {
-                sent++
-            } else if ((result.exceptionOrNull() as? ApiException)?.offline == true) {
-                // Masih offline: simpan sisanya untuk dicoba lagi nanti.
-                remaining += pending.drop(index)
-                break
+    /** Kirim jejak dan catatan yang tertunda. @return jumlah jejak yang berhasil terkirim. */
+    suspend fun syncPending(): Int {
+        noteRepository.syncPending()
+        return queueMutex.withLock {
+            val pending = loadPending()
+            if (pending.isEmpty()) return@withLock 0
+            val remaining = mutableListOf<CreateTaskRequest>()
+            var sent = 0
+            for ((index, request) in pending.withIndex()) {
+                val result = createTask(request)
+                if (result.isSuccess) {
+                    sent++
+                } else if ((result.exceptionOrNull() as? ApiException)?.retryable == true) {
+                    // Masih offline atau server sedang sibuk: simpan sisanya untuk dicoba lagi nanti.
+                    remaining += pending.drop(index)
+                    break
+                }
+                // Ditolak server (4xx, data tidak valid): dibuang supaya antrean tidak macet.
             }
-            // Ditolak server (data tidak valid): dibuang supaya antrean tidak macet.
+            savePending(remaining)
+            sent
         }
-        savePending(remaining)
-        sent
     }
 
     private suspend fun loadPending(): List<CreateTaskRequest> {
         val json = settings.pendingTasks() ?: return emptyList()
-        return runCatching {
+        val list = runCatching {
             gson.fromJson<List<CreateTaskRequest>>(json, object : TypeToken<List<CreateTaskRequest>>() {}.type)
-        }.getOrDefault(emptyList())
+        }.getOrNull().orEmpty()
+        // Antrean dari versi 1.0 belum punya client_id; id yang diberikan di sini ikut tersimpan lagi.
+        return list.map { if (it.clientId == null) it.copy(clientId = UUID.randomUUID().toString()) else it }
     }
 
     private suspend fun savePending(list: List<CreateTaskRequest>) {
         settings.setPendingTasks(if (list.isEmpty()) null else gson.toJson(list))
     }
 
-    suspend fun deleteTask(id: Int): Result<DeleteResult> =
-        apiCall { client.api().deleteTask(id) }
+    suspend fun deleteTask(id: Int): Result<DeleteResult> = device.authed { deleteTask(id) }
 }

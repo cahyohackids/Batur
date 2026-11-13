@@ -10,12 +10,16 @@ if (!process.env.DATABASE_URL) {
   process.exit(1);
 }
 
-const needsSsl = /sslmode=require/.test(process.env.DATABASE_URL);
-
+// SSL diatur lewat connection string (misalnya ?sslmode=require untuk database cloud).
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: needsSsl ? { rejectUnauthorized: false } : false,
+  max: Number.parseInt(process.env.DB_POOL_MAX || '10', 10),
+  connectionTimeoutMillis: 5_000,
+  idleTimeoutMillis: 30_000,
 });
+
+// Koneksi idle yang putus (database restart) tidak boleh menjatuhkan proses.
+pool.on('error', (err) => console.error('[db] koneksi idle error:', err.message));
 
 module.exports = {
   query: (text, params) => pool.query(text, params),

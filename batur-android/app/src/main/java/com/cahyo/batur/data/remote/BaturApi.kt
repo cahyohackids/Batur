@@ -1,5 +1,8 @@
 package com.cahyo.batur.data.remote
 
+import com.google.gson.JsonObject
+import okhttp3.ResponseBody
+import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
@@ -8,10 +11,17 @@ import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
 
+/** Header Authorization dipasang interceptor di [ApiClient]; pemilik data dibaca server dari token. */
 interface BaturApi {
 
     @GET("api/health")
     suspend fun health(): ApiResponse<HealthStatus>
+
+    @POST(REGISTER_PATH)
+    suspend fun registerDevice(@Body body: JsonObject = JsonObject()): ApiResponse<RegisteredDevice>
+
+    @GET("api/app/version")
+    suspend fun appVersion(): ApiResponse<AppVersion>
 
     @GET("api/skills")
     suspend fun getSkills(
@@ -39,7 +49,6 @@ interface BaturApi {
 
     @GET("api/tasks")
     suspend fun getTasks(
-        @Query("device_id") deviceId: String,
         @Query("status") status: String? = null,
         @Query("mode") mode: String? = null,
         @Query("limit") limit: Int = 50,
@@ -47,7 +56,7 @@ interface BaturApi {
     ): ApiResponse<List<TaskSummary>>
 
     @GET("api/tasks/stats")
-    suspend fun getTaskStats(@Query("device_id") deviceId: String): ApiResponse<TaskStats>
+    suspend fun getTaskStats(): ApiResponse<TaskStats>
 
     @GET("api/tasks/{id}")
     suspend fun getTask(@Path("id") id: Int): ApiResponse<TaskDetail>
@@ -59,11 +68,22 @@ interface BaturApi {
     suspend fun deleteTask(@Path("id") id: Int): ApiResponse<DeleteResult>
 
     @GET("api/notes")
-    suspend fun getNotes(@Query("device_id") deviceId: String): ApiResponse<List<Note>>
+    suspend fun getNotes(): ApiResponse<List<Note>>
 
     @POST("api/notes")
     suspend fun createNote(@Body body: CreateNoteRequest): ApiResponse<Note>
 
+    @DELETE("api/notes/{id}")
+    suspend fun deleteNote(@Path("id") id: Int): ApiResponse<DeleteResult>
+
     @POST("api/agent/cloud")
     suspend fun runCloudAgent(@Body body: AgentRequest): ApiResponse<AgentResult>
+
+    /** Audio mp3 jawaban Batur. Error tetap berupa JSON ApiResponse. */
+    @POST("api/tts")
+    suspend fun speech(@Body body: SpeechRequest): Response<ResponseBody>
+
+    companion object {
+        const val REGISTER_PATH = "api/devices/register"
+    }
 }

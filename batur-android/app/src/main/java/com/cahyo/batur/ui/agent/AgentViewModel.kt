@@ -4,9 +4,19 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.cahyo.batur.agent.AgentOrchestrator
 import com.cahyo.batur.agent.Decision
+import com.cahyo.batur.agent.EngineState
+import com.cahyo.batur.agent.OnDeviceAgentEngine
+import com.cahyo.batur.data.remote.ApiException
 import com.cahyo.batur.data.prefs.SettingsStore
 import com.cahyo.batur.data.repository.RecordOutcome
+import com.cahyo.batur.speech.SpeechPlayer
+import com.cahyo.batur.speech.SpeechState
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,7 +27,8 @@ import kotlinx.coroutines.launch
 
 enum class Tone { NORMAL, SUCCESS, ERROR }
 
-enum class ConfirmState { PENDING, RUNNING, DONE, FAILED, CANCELLED }
+/** EXPIRED: aksi dari sesi sebelumnya yang dipulihkan dari riwayat chat; tidak bisa dijalankan. */
+enum class ConfirmState { PENDING, RUNNING, DONE, FAILED, CANCELLED, EXPIRED }
 
 sealed interface ChatMessage {
     val id: Long
@@ -40,6 +51,8 @@ sealed interface ChatMessage {
         val title: String,
         val skillName: String?,
         val icon: String,
+        /** function_name skill, misalnya save_note untuk tombol "Lihat catatan". */
+        val functionName: String?,
         val details: List<Pair<String, String>>,
         val mechanism: String,
         val mode: String,
@@ -61,17 +74,44 @@ data class EngineChoice(val mode: String, val onDeviceModel: String?) {
     val usesOnDevice: Boolean get() = mode == SettingsStore.ENGINE_AUTO && onDeviceModel != null
 }
 
+@OptIn(FlowPreview::class)
 class AgentViewModel(
     private val orchestrator: AgentOrchestrator,
     private val settings: SettingsStore,
+    onDeviceEngine: OnDeviceAgentEngine,
+    private val speech: SpeechPlayer,
 ) : ViewModel() {
-
-    init {
-        orchestrator.warmUp()
-    }
 
     private val _state = MutableStateFlow(AgentUiState())
     val state: StateFlow<AgentUiState> = _state.asStateFlow()
+
+    /** Untuk label "Memuat model…" saat model on-device sedang dimuat ke memori. */
+    val engineState: StateFlow<EngineState> = onDeviceEngine.state
+
+    /** Pesan yang sedang dibacakan, untuk ikon speaker. */
+    val speechState: StateFlow<SpeechState> = speech.state
+
+    private val autoSpeak: StateFlow<Boolean> = settings.autoSpeak
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    private var thinkingJob: Job? = null
+    private val pendingActions = mutableMapOf<Long, Decision.Action>()
+    private var lastId = 0L
+    private fun nextId() = ++lastId
+
+    init {
+        orchestrator.warmUp()
+        viewModelScope.launch {
+            val restored = ChatHistory.decode(settings.chatHistory())
+            lastId = maxOf(lastId, restored.maxOfOrNull { it.id } ?: 0L)
+            _state.update { it.copy(messages = restored + it.messages) }
+            // Simpan setelah pemulihan selesai, supaya riwayat lama tidak tertimpa daftar kosong.
+            _state.map { it.messages }
+                .distinctUntilChanged()
+                .debounce(400)
+                .collect { settings.setChatHistory(ChatHistory.encode(it)) }
+        }
+    }
 
     val engine: StateFlow<EngineChoice> = combine(settings.engineMode, settings.activeModel) { mode, model ->
         EngineChoice(mode, model?.name)
@@ -85,14 +125,15 @@ class AgentViewModel(
         }
     }
 
-    private val pendingActions = mutableMapOf<Long, Decision.Action>()
-    private var lastId = 0L
-    private fun nextId() = ++lastId
-
     fun send(raw: String) {
         val command = raw.trim()
         if (command.isEmpty() || !_state.value.canSend) return
+        if (command.length > MAX_COMMAND_LENGTH) {
+            append(ChatMessage.Assistant(nextId(), "Perintahnya kepanjangan. Maksimal $MAX_COMMAND_LENGTH karakter.", tone = Tone.ERROR))
+            return
+        }
 
+        speech.stop()
         val thinkingId = nextId()
         _state.update {
             it.copy(
@@ -101,18 +142,43 @@ class AgentViewModel(
             )
         }
 
-        viewModelScope.launch {
+        thinkingJob = viewModelScope.launch {
             val result = orchestrator.decide(command)
             removeMessage(thinkingId)
             result.fold(
                 onSuccess = { handle(it) },
-                onFailure = {
-                    val text = if (it is IllegalStateException) it.message.orEmpty() else "Gagal menghubungi Batur API. ${it.message}"
-                    append(ChatMessage.Assistant(nextId(), text, tone = Tone.ERROR))
-                },
+                onFailure = { appendReply(ChatMessage.Assistant(nextId(), failureText(it), tone = Tone.ERROR)) },
             )
             _state.update { it.copy(busy = false) }
         }
+    }
+
+    /**
+     * Batalkan perintah yang sedang diproses. Inferensi native tidak bisa dihentikan di tengah jalan,
+     * tapi hasilnya dibuang karena coroutine-nya sudah dibatalkan.
+     */
+    fun cancelThinking() {
+        val job = thinkingJob ?: return
+        if (!job.isActive || _state.value.messages.none { it is ChatMessage.Thinking }) return
+        job.cancel()
+        thinkingJob = null
+        _state.update { s ->
+            s.copy(busy = false, messages = s.messages.filterNot { it is ChatMessage.Thinking })
+        }
+        append(ChatMessage.Assistant(nextId(), "Oke, perintah dibatalkan."))
+    }
+
+    private fun failureText(e: Throwable): String = when {
+        e is ApiException && e.code == "quota_exceeded" -> buildString {
+            append(e.message.orEmpty())
+            if (e.message?.contains("on-device", ignoreCase = true) != true) {
+                append(" Pakai mode on-device: unduh model di tab Model, lalu pilih Otomatis.")
+            }
+        }
+        // Server menjawab tapi menolak (dibatasi, data tidak valid): pesan server sudah jelas.
+        e is ApiException && e.httpCode != null -> e.message.orEmpty()
+        e is IllegalStateException -> e.message.orEmpty()
+        else -> "Gagal menghubungi Batur API. ${e.message}"
     }
 
     private suspend fun handle(decision: Decision) {
@@ -144,6 +210,7 @@ class AgentViewModel(
                         title = action.title,
                         skillName = decision.skillName,
                         icon = action.icon,
+                        functionName = action.functionName,
                         details = action.details,
                         mechanism = action.mechanism,
                         mode = decision.trace.mode,
@@ -187,7 +254,21 @@ class AgentViewModel(
 
     fun clear() {
         if (!_state.value.canSend) return
+        speech.stop()
         _state.value = AgentUiState()
+    }
+
+    fun toggleSpeech(message: ChatMessage.Assistant) = speech.toggle(message.id, message.text)
+
+    fun stopSpeech() = speech.stop()
+
+    override fun onCleared() {
+        speech.stop()
+    }
+
+    companion object {
+        /** Sama dengan batas server untuk POST /api/agent/cloud. */
+        const val MAX_COMMAND_LENGTH = 500
     }
 
     private suspend fun run(messageId: Long, decision: Decision.Action) {
@@ -206,7 +287,6 @@ class AgentViewModel(
         }
     }
 
-    /** Catat ke Riwayat; kalau gagal, beri tahu di chat tapi alur tetap jalan. */
     /** Catat ke Riwayat, tampilkan pesan hasil, lalu catatan kecil kalau riwayat tertunda atau gagal. */
     private suspend fun recordThen(
         decision: Decision,
@@ -215,13 +295,13 @@ class AgentViewModel(
         message: (taskId: Int?) -> ChatMessage,
     ) {
         when (val outcome = orchestrator.record(decision.trace, status, resultText)) {
-            is RecordOutcome.Saved -> append(message(outcome.id))
+            is RecordOutcome.Saved -> appendReply(message(outcome.id))
             RecordOutcome.Queued -> {
-                append(message(null))
-                append(ChatMessage.Assistant(nextId(), "Server tidak terjangkau. Riwayat disimpan dulu di ponsel dan dikirim otomatis saat online."))
+                appendReply(message(null))
+                append(ChatMessage.Assistant(nextId(), "Riwayat belum bisa dikirim ke server. Disimpan dulu di ponsel dan dikirim otomatis nanti."))
             }
             is RecordOutcome.Failed -> {
-                append(message(null))
+                appendReply(message(null))
                 append(ChatMessage.Assistant(nextId(), "Riwayat tidak tersimpan: ${outcome.message}", tone = Tone.ERROR))
             }
         }
@@ -229,6 +309,12 @@ class AgentViewModel(
 
     private fun append(message: ChatMessage) {
         _state.update { it.copy(messages = it.messages + message) }
+    }
+
+    /** Jawaban utama Batur: dibacakan otomatis kalau pengaturannya aktif. Catatan kecil tidak. */
+    private fun appendReply(message: ChatMessage) {
+        append(message)
+        if (autoSpeak.value && message is ChatMessage.Assistant) speech.speak(message.id, message.text)
     }
 
     private fun removeMessage(id: Long) {

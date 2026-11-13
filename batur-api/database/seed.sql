@@ -73,12 +73,13 @@ INSERT INTO models (slug, name, type, provider, runtime, gateway_model, size_lab
  TRUE, 'Model kecil (INT4) sebagai cadangan untuk ponsel dengan RAM atau penyimpanan terbatas. Lebih cepat diunduh, tapi kurang akurat memilih skill dibanding Gemma 4 E2B.', FALSE,
  'https://huggingface.co/litert-community/Qwen3-0.6B/resolve/main/Qwen3-0.6B_dynamic_wi4b32_afp32.litertlm',
  'Qwen3-0.6B_dynamic_wi4b32_afp32.litertlm', 343490560),
-('cloud-gateway', 'Cloud via Gateway', 'cloud', 'Ezkielyna Gateway', 'OpenAI-compatible API', 'isi-sesuai-gateway',
+('cloud-gateway', 'Batur Cloud', 'cloud', 'Ezkielyna API', 'OpenAI-compatible API', NULL,
  'server', 'tidak memakai RAM ponsel',
- TRUE, 'Model cloud yang dipanggil lewat Batur API ke gateway. Dipakai untuk tugas berat atau saat model on-device tidak yakin.', FALSE,
+ TRUE, 'Model cloud yang dipanggil lewat Batur API ke Ezkielyna API. Dipakai untuk tugas berat atau saat model on-device tidak yakin.', FALSE,
  NULL, NULL, NULL)
 ON CONFLICT (slug) DO UPDATE SET
   name = EXCLUDED.name, provider = EXCLUDED.provider, runtime = EXCLUDED.runtime,
+  gateway_model = EXCLUDED.gateway_model,
   size_label = EXCLUDED.size_label, ram_label = EXCLUDED.ram_label,
   supports_tools = EXCLUDED.supports_tools, description = EXCLUDED.description,
   download_url = EXCLUDED.download_url, file_name = EXCLUDED.file_name, size_bytes = EXCLUDED.size_bytes;

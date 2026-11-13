@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Khusus debug: backend lokal jalan via HTTP dan IP hotspot berubah-ubah
+     (domain-config tidak mendukung rentang IP), jadi cleartext diizinkan. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

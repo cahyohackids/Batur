@@ -1,9 +1,10 @@
 // Helper respons agar semua endpoint memakai format yang sama:
-// { success: true, data, meta? }  atau  { success: false, message }
+// { success: true, data, meta? }  atau  { success: false, message, code? }
 class HttpError extends Error {
-  constructor(status, message) {
+  constructor(status, message, code) {
     super(message);
     this.status = status;
+    if (code) this.code = code;
   }
 }
 

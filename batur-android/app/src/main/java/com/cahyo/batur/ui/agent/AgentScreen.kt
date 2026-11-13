@@ -39,6 +39,8 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.RestartAlt
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.HistoryToggleOff
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
@@ -57,6 +59,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.material.icons.automirrored.outlined.VolumeUp
+import androidx.compose.material.icons.outlined.StopCircle
+import com.cahyo.batur.speech.SpeechState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -74,7 +80,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.cahyo.batur.AppContainer
 import com.cahyo.batur.ui.AppViewModelProvider
+import com.cahyo.batur.agent.EngineState
+import com.cahyo.batur.agent.executor.NoteExecutor
 import com.cahyo.batur.ui.common.BaturScaffold
+import com.cahyo.batur.ui.common.UpdateBanner
 import com.cahyo.batur.ui.common.ModeTag
 import com.cahyo.batur.ui.common.skillIcon
 
@@ -90,14 +99,22 @@ private val EXAMPLES = listOf(
 fun AgentScreen(
     container: AppContainer,
     onOpenTask: (Int) -> Unit,
+    onOpenNotes: () -> Unit,
     viewModel: AgentViewModel = viewModel(factory = AppViewModelProvider.Factory),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val engine by viewModel.engine.collectAsStateWithLifecycle()
+    val engineState by viewModel.engineState.collectAsStateWithLifecycle()
+    val speech by viewModel.speechState.collectAsStateWithLifecycle()
+    val update by container.update.collectAsStateWithLifecycle()
     var input by rememberSaveable { mutableStateOf("") }
     val draft by container.agentDraft.collectAsStateWithLifecycle()
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
+    val voice = rememberVoiceInput { spoken -> input = if (input.isBlank()) spoken else "${input.trimEnd()} $spoken" }
+
+    // Berhenti membacakan saat pindah ke layar lain.
+    DisposableEffect(Unit) { onDispose { viewModel.stopSpeech() } }
 
     LaunchedEffect(draft) {
         draft?.let {
@@ -137,15 +154,23 @@ fun AgentScreen(
                 .fillMaxSize()
                 .imePadding(),
         ) {
+            update?.let {
+                UpdateBanner(it, onDismiss = container::dismissUpdate, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            }
             Box(Modifier.weight(1f)) {
                 if (state.messages.isEmpty()) {
                     Welcome(onExample = { input = it })
                 } else {
                     MessageList(
                         messages = state.messages,
+                        loadingModel = engineState == EngineState.Loading,
                         onConfirm = viewModel::confirm,
                         onCancel = viewModel::cancel,
+                        onCancelThinking = viewModel::cancelThinking,
                         onOpenTask = onOpenTask,
+                        onOpenNotes = onOpenNotes,
+                        speech = speech,
+                        onSpeak = viewModel::toggleSpeech,
                     )
                 }
             }
@@ -169,7 +194,13 @@ fun AgentScreen(
                     keyboardActions = KeyboardActions(onSend = { submit() }),
                     modifier = Modifier.weight(1f),
                 )
-                Spacer(Modifier.width(8.dp))
+                if (voice != null) {
+                    IconButton(onClick = voice, enabled = state.canSend) {
+                        Icon(Icons.Outlined.Mic, contentDescription = "Ucapkan perintah")
+                    }
+                } else {
+                    Spacer(Modifier.width(8.dp))
+                }
                 FilledIconButton(onClick = submit, enabled = state.canSend && input.isNotBlank()) {
                     Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Kirim")
                 }
@@ -208,9 +239,14 @@ private fun Welcome(onExample: (String) -> Unit) {
 @Composable
 private fun MessageList(
     messages: List<ChatMessage>,
+    loadingModel: Boolean,
     onConfirm: (Long) -> Unit,
     onCancel: (Long) -> Unit,
+    onCancelThinking: () -> Unit,
     onOpenTask: (Int) -> Unit,
+    onOpenNotes: () -> Unit,
+    speech: SpeechState,
+    onSpeak: (ChatMessage.Assistant) -> Unit,
 ) {
     val listState = rememberLazyListState()
     // Gulir ke pesan terbaru setiap ada pesan baru atau status kartu berubah.
@@ -226,12 +262,18 @@ private fun MessageList(
         items(messages, key = { it.id }) { message ->
             when (message) {
                 is ChatMessage.User -> UserBubble(message.text)
-                is ChatMessage.Thinking -> ThinkingRow()
-                is ChatMessage.Assistant -> AssistantBubble(message, onOpenTask)
+                is ChatMessage.Thinking -> ThinkingRow(loadingModel, onCancelThinking)
+                is ChatMessage.Assistant -> AssistantBubble(
+                    message,
+                    speech = speech.takeIf { it.messageId == message.id },
+                    onSpeak = { onSpeak(message) },
+                    onOpenTask = onOpenTask,
+                )
                 is ChatMessage.Confirmation -> ConfirmationCard(
                     message,
                     onConfirm = { onConfirm(message.id) },
                     onCancel = { onCancel(message.id) },
+                    onOpenNotes = onOpenNotes,
                 )
             }
         }
@@ -253,20 +295,28 @@ private fun UserBubble(text: String) {
 }
 
 @Composable
-private fun ThinkingRow() {
+private fun ThinkingRow(loadingModel: Boolean, onCancel: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 4.dp)) {
         CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(10.dp))
         Text(
-            "Batur sedang berpikir…",
+            if (loadingModel) "Memuat model…" else "Batur sedang berpikir…",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
         )
+        TextButton(onClick = onCancel) { Text("Batal") }
     }
 }
 
 @Composable
-private fun AssistantBubble(message: ChatMessage.Assistant, onOpenTask: (Int) -> Unit) {
+private fun AssistantBubble(
+    message: ChatMessage.Assistant,
+    /** Status suara untuk pesan ini saja; null kalau tidak sedang dibacakan. */
+    speech: SpeechState?,
+    onSpeak: () -> Unit,
+    onOpenTask: (Int) -> Unit,
+) {
     val colors = MaterialTheme.colorScheme
     val (container, content) = when (message.tone) {
         Tone.NORMAL -> colors.surfaceContainerHigh to colors.onSurface
@@ -281,11 +331,21 @@ private fun AssistantBubble(message: ChatMessage.Assistant, onOpenTask: (Int) ->
         ) {
             Text(message.text, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
         }
-        if (message.mode != null || message.taskId != null) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
-                message.mode?.let { ModeTag(it) }
-                message.taskId?.let { id ->
-                    TextButton(onClick = { onOpenTask(id) }) { Text("Lihat jejak") }
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+            message.mode?.let { ModeTag(it) }
+            message.taskId?.let { id ->
+                TextButton(onClick = { onOpenTask(id) }) { Text("Lihat jejak") }
+            }
+            IconButton(onClick = onSpeak, modifier = Modifier.size(40.dp)) {
+                when (speech) {
+                    is SpeechState.Loading -> CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                    is SpeechState.Playing -> Icon(Icons.Outlined.StopCircle, contentDescription = "Berhenti membacakan")
+                    else -> Icon(
+                        Icons.AutoMirrored.Outlined.VolumeUp,
+                        contentDescription = "Bacakan jawaban",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                    )
                 }
             }
         }
@@ -297,6 +357,7 @@ private fun ConfirmationCard(
     message: ChatMessage.Confirmation,
     onConfirm: () -> Unit,
     onCancel: () -> Unit,
+    onOpenNotes: () -> Unit,
 ) {
     val pending = message.state == ConfirmState.PENDING
     Card(
@@ -357,9 +418,20 @@ private fun ConfirmationCard(
                     Text("Menjalankan…", style = MaterialTheme.typography.bodySmall)
                 }
 
-                ConfirmState.DONE -> StateLine(Icons.Outlined.CheckCircle, "Dijalankan", MaterialTheme.colorScheme.primary)
+                ConfirmState.DONE -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    StateLine(Icons.Outlined.CheckCircle, "Dijalankan", MaterialTheme.colorScheme.primary)
+                    if (message.functionName == NoteExecutor.functionName) {
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = onOpenNotes) { Text("Lihat catatan") }
+                    }
+                }
                 ConfirmState.FAILED -> StateLine(Icons.Outlined.ErrorOutline, "Gagal dijalankan", MaterialTheme.colorScheme.error)
                 ConfirmState.CANCELLED -> StateLine(Icons.Outlined.Cancel, "Dibatalkan", MaterialTheme.colorScheme.onSurfaceVariant)
+                ConfirmState.EXPIRED -> StateLine(
+                    Icons.Outlined.HistoryToggleOff,
+                    "Kedaluwarsa. Kirim ulang perintahnya kalau masih perlu.",
+                    MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

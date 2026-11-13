@@ -7,6 +7,7 @@ import android.util.Log
 import com.cahyo.batur.data.prefs.ActiveModel
 import com.cahyo.batur.data.prefs.SettingsStore
 import com.cahyo.batur.data.remote.FunctionCall
+import com.cahyo.batur.data.remote.asObjectOrNull
 import com.cahyo.batur.data.remote.ToolDefinition
 import com.cahyo.batur.data.repository.SkillRepository
 import com.google.ai.edge.litertlm.Backend
@@ -27,6 +28,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -36,6 +40,12 @@ import java.io.File
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+
+/** Status model on-device di memori, untuk label "Memuat model…" di Agent. */
+enum class EngineState { Idle, Loading, Ready }
+
+/** On-device sengaja dilewati (misalnya pengguna baru memilih "Selalu Cloud"), bukan gagal. */
+class OnDeviceSkippedException(message: String) : IllegalStateException(message)
 
 /**
  * Mode on-device: model .litertlm dijalankan LiteRT-LM langsung di ponsel.
@@ -55,6 +65,9 @@ class OnDeviceAgentEngine(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    private val _state = MutableStateFlow(EngineState.Idle)
+    val state: StateFlow<EngineState> = _state.asStateFlow()
+
     private var engine: Engine? = null
     private var prepared: Prepared? = null
 
@@ -72,6 +85,13 @@ class OnDeviceAgentEngine(
         model to file
     }
 
+    /**
+     * Dicek ulang di dalam lock: selama menunggu giliran, pengguna bisa saja memilih "Selalu Cloud"
+     * atau menghapus file, dan model ±1,7 GB tidak boleh tetap dimuat.
+     */
+    private suspend fun stillWanted(file: File): Boolean =
+        settings.engineMode.first() == SettingsStore.ENGINE_AUTO && readyModel()?.second?.path == file.path
+
     override suspend fun run(command: String): Result<EngineOutput> {
         val (model, file) = readyModel()
             ?: return Result.failure(IllegalStateException("Belum ada model on-device yang siap."))
@@ -79,6 +99,9 @@ class OnDeviceAgentEngine(
         val start = SystemClock.elapsedRealtime()
         val result = withContext(Dispatchers.Default) {
             mutex.withLock {
+                if (!stillWanted(file)) {
+                    return@withLock Result.failure<EngineOutput>(OnDeviceSkippedException("Model on-device tidak dipakai lagi."))
+                }
                 runCatching {
                     val engine = engineFor(file)
                     takeConversation(engine, tools).use { conversation ->
@@ -122,6 +145,7 @@ class OnDeviceAgentEngine(
     private fun prepareInBackground(file: File, tools: List<ToolDefinition>) {
         scope.launch {
             mutex.withLock {
+                if (!stillWanted(file)) return@withLock
                 runCatching {
                     val engine = engineFor(file)
                     val key = toolsKey(tools)
@@ -169,12 +193,14 @@ class OnDeviceAgentEngine(
         engine = null
         loadedPath = null
         backendLabel = null
+        _state.value = EngineState.Idle
     }
 
     private fun engineFor(file: File): Engine {
         engine?.let { if (loadedPath == file.path) return it }
         engine?.close()
         engine = null
+        _state.value = EngineState.Loading
 
         var lastError: Throwable? = null
         for ((label, backend) in backends()) {
@@ -184,6 +210,7 @@ class OnDeviceAgentEngine(
                 engine = candidate
                 loadedPath = file.path
                 backendLabel = label
+                _state.value = EngineState.Ready
                 return candidate
             } catch (e: Throwable) {
                 Log.w(TAG, "Backend $label gagal", e)
@@ -191,6 +218,7 @@ class OnDeviceAgentEngine(
                 lastError = e
             }
         }
+        _state.value = EngineState.Idle
         throw IllegalStateException("Model tidak bisa dimuat: ${lastError?.message}", lastError)
     }
 
@@ -227,7 +255,7 @@ class OnDeviceAgentEngine(
             JsonObject().apply {
                 addProperty("name", definition.function.name)
                 addProperty("description", definition.function.description)
-                add("parameters", definition.function.parameters ?: JsonObject())
+                add("parameters", definition.function.parameters.asObjectOrNull() ?: JsonObject())
             },
         )
 

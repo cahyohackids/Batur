@@ -10,13 +10,15 @@
     "db:init": "node src/lib/initDb.js",
     "test": "node --test test/"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "author": "Ahmad Putra Cahyo (21120124140143)",
   "license": "MIT",
   "dependencies": {
-    "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
+    "node-edge-tts": "1.2.12",
     "pg": "^8.13.1"
   }
 }

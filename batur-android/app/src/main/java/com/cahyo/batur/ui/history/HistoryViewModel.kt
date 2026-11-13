@@ -6,6 +6,7 @@ import com.cahyo.batur.data.remote.TaskSummary
 import com.cahyo.batur.data.repository.TaskRepository
 import com.cahyo.batur.ui.common.UiState
 import com.cahyo.batur.ui.common.toListState
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,8 +31,12 @@ class HistoryViewModel(private val repository: TaskRepository) : ViewModel() {
     }
 
     /** Dipanggil setiap halaman tampil, supaya tugas baru dan tugas yang dihapus langsung terlihat. */
+    private var refreshJob: Job? = null
+
     fun refresh() {
-        viewModelScope.launch {
+        // Filter bisa diganti saat refresh lama masih jalan; hasil lama tidak boleh menimpa yang baru.
+        refreshJob?.cancel()
+        refreshJob = viewModelScope.launch {
             _isRefreshing.value = _state.value is UiState.Success
             _state.value = repository.getTasks(_status.value).toListState()
             _isRefreshing.value = false

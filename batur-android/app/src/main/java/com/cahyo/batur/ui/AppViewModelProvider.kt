@@ -12,6 +12,8 @@ import com.cahyo.batur.ui.history.HistoryDetailViewModel
 import com.cahyo.batur.ui.history.HistoryViewModel
 import com.cahyo.batur.ui.models.ModelDetailViewModel
 import com.cahyo.batur.ui.models.ModelsViewModel
+import com.cahyo.batur.ui.notes.NotesViewModel
+import com.cahyo.batur.ui.onboarding.OnboardingViewModel
 import com.cahyo.batur.ui.profile.ProfileViewModel
 import com.cahyo.batur.ui.skills.SkillDetailViewModel
 import com.cahyo.batur.ui.skills.SkillsViewModel
@@ -22,15 +24,18 @@ object AppViewModelProvider {
         initializer { SkillDetailViewModel(createSavedStateHandle(), container().skillRepository) }
         initializer { HistoryViewModel(container().taskRepository) }
         initializer { HistoryDetailViewModel(createSavedStateHandle(), container().taskRepository) }
-        initializer { ModelsViewModel(container().modelRepository, container().modelStore, container().settings) }
+        initializer { ModelsViewModel(container()) }
+        initializer { ModelDetailViewModel(createSavedStateHandle(), container(), application()) }
+        initializer { ProfileViewModel(container()) }
+        initializer { NotesViewModel(container().noteRepository) }
+        initializer { OnboardingViewModel(container(), application()) }
         initializer {
             val c = container()
-            ModelDetailViewModel(createSavedStateHandle(), c.modelRepository, c.modelStore, c.settings, c.onDeviceEngine)
+            AgentViewModel(c.agentOrchestrator, c.settings, c.onDeviceEngine, c.speech)
         }
-        initializer { ProfileViewModel(container()) }
-        initializer { AgentViewModel(container().agentOrchestrator, container().settings) }
     }
 }
 
-fun CreationExtras.container(): AppContainer =
-    (this[APPLICATION_KEY] as BaturApplication).container
+fun CreationExtras.application(): BaturApplication = this[APPLICATION_KEY] as BaturApplication
+
+fun CreationExtras.container(): AppContainer = application().container

@@ -87,3 +87,48 @@ CREATE TABLE IF NOT EXISTS notes (
 CREATE INDEX IF NOT EXISTS idx_tasks_device_created ON tasks (device_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_task_steps_task      ON task_steps (task_id, step_order);
 CREATE INDEX IF NOT EXISTS idx_notes_device_created ON notes (device_id, created_at DESC);
+
+-- =====================================================================
+-- v1.1: identitas perangkat, preferensi skill per perangkat, kuota agent,
+-- dan idempotensi (client_id) untuk antrean offline aplikasi.
+-- =====================================================================
+
+-- Setiap HP mendaftar sekali; server hanya menyimpan hash token.
+CREATE TABLE IF NOT EXISTS devices (
+  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  token_hash   CHAR(64)    NOT NULL UNIQUE,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Skill aktif/nonaktif per perangkat (default mengikuti skills.is_active).
+CREATE TABLE IF NOT EXISTS device_skill_prefs (
+  device_id  UUID        NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  skill_slug VARCHAR(50) NOT NULL REFERENCES skills(slug) ON UPDATE CASCADE ON DELETE CASCADE,
+  is_active  BOOLEAN     NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (device_id, skill_slug)
+);
+
+-- Jumlah perintah mode cloud per perangkat per hari (WIB), untuk kuota harian.
+CREATE TABLE IF NOT EXISTS agent_usage (
+  device_id UUID    NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  day       DATE    NOT NULL,
+  count     INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (device_id, day)
+);
+
+-- Pemakaian suara cloud (POST /api/tts) per perangkat per hari (WIB); cache tidak dihitung.
+CREATE TABLE IF NOT EXISTS tts_usage (
+  device_id UUID    NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  day       DATE    NOT NULL,
+  count     INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (device_id, day)
+);
+
+-- client_id dikirim aplikasi untuk tiap tugas/catatan; kirim ulang dari antrean
+-- offline tidak membuat data dobel.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS client_id UUID;
+ALTER TABLE notes ADD COLUMN IF NOT EXISTS client_id UUID;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_device_client ON tasks (device_id, client_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_notes_device_client ON notes (device_id, client_id);

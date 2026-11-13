@@ -18,10 +18,19 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
-import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.ErrorOutline
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.outlined.EditNote
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material.icons.automirrored.outlined.VolumeUp
+import androidx.compose.material.icons.outlined.StopCircle
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Switch
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
+import androidx.compose.runtime.DisposableEffect
+import com.cahyo.batur.data.prefs.SettingsStore
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -30,14 +39,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,20 +62,32 @@ import com.cahyo.batur.R
 import com.cahyo.batur.data.remote.TaskStats
 import com.cahyo.batur.ui.AppViewModelProvider
 import com.cahyo.batur.ui.common.BaturScaffold
+import com.cahyo.batur.ui.common.ConnectionLine
+import com.cahyo.batur.ui.common.ConnectionState
+import com.cahyo.batur.ui.common.ServerUrlDialog
+import com.cahyo.batur.ui.common.UpdateBanner
 import com.cahyo.batur.ui.common.SectionTitle
 import com.cahyo.batur.ui.common.UiState
 import com.cahyo.batur.ui.common.formatLatency
-import com.cahyo.batur.ui.theme.StatusColors
 
 private const val GITHUB_URL = "https://github.com/cahyohackids/Batur"
+private const val EZKIELYNA_URL = "https://api.ezkielyna.store"
 
 @Composable
-fun ProfileScreen(viewModel: ProfileViewModel = viewModel(factory = AppViewModelProvider.Factory)) {
+fun ProfileScreen(
+    onOpenNotes: () -> Unit,
+    viewModel: ProfileViewModel = viewModel(factory = AppViewModelProvider.Factory),
+) {
     val stats by viewModel.stats.collectAsStateWithLifecycle()
     val baseUrl by viewModel.baseUrl.collectAsStateWithLifecycle()
     val deviceId by viewModel.deviceId.collectAsStateWithLifecycle()
     val connection by viewModel.connection.collectAsStateWithLifecycle()
-    var editing by remember { mutableStateOf(false) }
+    val update by viewModel.update.collectAsStateWithLifecycle()
+    val speechVoice by viewModel.speechVoice.collectAsStateWithLifecycle()
+    val autoSpeak by viewModel.autoSpeak.collectAsStateWithLifecycle()
+    val speech by viewModel.speech.collectAsStateWithLifecycle()
+    DisposableEffect(Unit) { onDispose { viewModel.stopSpeech() } }
+    var editing by rememberSaveable { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
 
     LaunchedEffect(Unit) {
@@ -83,6 +103,10 @@ fun ProfileScreen(viewModel: ProfileViewModel = viewModel(factory = AppViewModel
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
+            update?.let {
+                UpdateBanner(it, onDismiss = viewModel::dismissUpdate)
+                Spacer(Modifier.height(12.dp))
+            }
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Image(
@@ -113,6 +137,27 @@ fun ProfileScreen(viewModel: ProfileViewModel = viewModel(factory = AppViewModel
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
+            Spacer(Modifier.height(12.dp))
+            Card(
+                onClick = onOpenNotes,
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.EditNote, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Catatan saya", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Catatan yang kamu simpan lewat Agent",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, contentDescription = null)
+                }
+            }
+
             SectionTitle("Pembuat", Modifier.padding(top = 16.dp))
             InfoCard(
                 listOf(
@@ -130,6 +175,16 @@ fun ProfileScreen(viewModel: ProfileViewModel = viewModel(factory = AppViewModel
                 else -> CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
             }
 
+            SectionTitle("Suara", Modifier.padding(top = 16.dp))
+            SpeechSettings(
+                voice = speechVoice,
+                autoSpeak = autoSpeak,
+                previewing = speech.messageId != null,
+                onVoice = viewModel::setSpeechVoice,
+                onAutoSpeak = viewModel::setAutoSpeak,
+                onPreview = { if (speech.messageId != null) viewModel.stopSpeech() else viewModel.previewVoice() },
+            )
+
             SectionTitle("Server Batur API", Modifier.padding(top = 16.dp))
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
                 Column(Modifier.padding(16.dp)) {
@@ -146,9 +201,16 @@ fun ProfileScreen(viewModel: ProfileViewModel = viewModel(factory = AppViewModel
                     ConnectionRow(connection, onRetry = viewModel::checkConnection)
                     Spacer(Modifier.height(8.dp))
                     Text("ID perangkat", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(deviceId, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        deviceId ?: "Belum terdaftar (otomatis saat terhubung)",
+                        fontFamily = if (deviceId != null) FontFamily.Monospace else null,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
             }
+
+            Spacer(Modifier.height(16.dp))
+            PoweredByCard(onOpen = { runCatching { uriHandler.openUri(EZKIELYNA_URL) } })
 
             Spacer(Modifier.height(16.dp))
             OutlinedButton(onClick = { uriHandler.openUri(GITHUB_URL) }, modifier = Modifier.fillMaxWidth()) {
@@ -161,14 +223,96 @@ fun ProfileScreen(viewModel: ProfileViewModel = viewModel(factory = AppViewModel
     }
 
     if (editing) {
-        BaseUrlDialog(
+        ServerUrlDialog(
             current = baseUrl,
             onDismiss = { editing = false },
             onSave = {
                 editing = false
                 viewModel.saveBaseUrl(it)
             },
+            onTest = viewModel::testUrl,
         )
+    }
+}
+
+@Composable
+private fun SpeechSettings(
+    voice: String,
+    autoSpeak: Boolean,
+    previewing: Boolean,
+    onVoice: (String) -> Unit,
+    onAutoSpeak: (Boolean) -> Unit,
+    onPreview: () -> Unit,
+) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
+        Column(Modifier.padding(16.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.toggleable(value = autoSpeak, role = Role.Switch, onValueChange = onAutoSpeak),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Bacakan jawaban otomatis", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Tanpa ini, ketuk ikon speaker di bawah jawaban.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = autoSpeak, onCheckedChange = null)
+            }
+            Spacer(Modifier.height(12.dp))
+            Text("Suara", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(
+                    SettingsStore.VOICE_FEMALE to "Perempuan",
+                    SettingsStore.VOICE_MALE to "Laki-laki",
+                    SettingsStore.VOICE_DEVICE to "Bawaan ponsel",
+                ).forEach { (key, label) ->
+                    FilterChip(selected = voice == key, onClick = { onVoice(key) }, label = { Text(label) })
+                }
+            }
+            Text(
+                if (voice == SettingsStore.VOICE_DEVICE) {
+                    "Suara bawaan Android, jalan tanpa internet."
+                } else {
+                    "Suara natural dari server Batur. Kalau offline, otomatis pakai suara bawaan ponsel."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(onClick = onPreview, contentPadding = PaddingValues(0.dp)) {
+                Icon(
+                    if (previewing) Icons.Outlined.StopCircle else Icons.AutoMirrored.Outlined.VolumeUp,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(if (previewing) "Berhenti" else "Coba suara")
+            }
+        }
+    }
+}
+
+/** Mode cloud memakai gateway Ezkielyna API; ditampilkan sekadarnya, tanpa nama model. */
+@Composable
+private fun PoweredByCard(onOpen: () -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.Cloud, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Mode cloud ditenagai Ezkielyna API", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Satu API key untuk ratusan model AI, bayar pakai QRIS.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TextButton(onClick = onOpen) { Text("Lihat") }
+        }
     }
 }
 
@@ -222,47 +366,10 @@ private fun StatCard(label: String, value: String, modifier: Modifier = Modifier
 @Composable
 private fun ConnectionRow(state: ConnectionState, onRetry: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        when (state) {
-            ConnectionState.Idle, ConnectionState.Checking -> {
-                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(8.dp))
-                Text("Mengecek koneksi…", style = MaterialTheme.typography.bodySmall)
-            }
-            ConnectionState.Connected -> {
-                Icon(Icons.Outlined.CheckCircle, contentDescription = null, tint = StatusColors.success, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Terhubung ke server dan database", style = MaterialTheme.typography.bodySmall)
-            }
-            is ConnectionState.Failed -> {
-                Icon(Icons.Outlined.ErrorOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(state.message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                TextButton(onClick = onRetry) { Text("Cek lagi") }
-            }
-        }
+        ConnectionLine(
+            if (state == ConnectionState.Idle) ConnectionState.Checking else state,
+            Modifier.weight(1f),
+        )
+        if (state is ConnectionState.Failed) TextButton(onClick = onRetry) { Text("Cek lagi") }
     }
-}
-
-@Composable
-private fun BaseUrlDialog(current: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
-    var text by remember { mutableStateOf(current) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Alamat server") },
-        text = {
-            Column {
-                Text(
-                    "Emulator: http://10.0.2.2:3000\nHP asli: http://<IP laptop>:3000 (satu jaringan/hotspot)",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(12.dp))
-                OutlinedTextField(value = text, onValueChange = { text = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onSave(text) }, enabled = text.isNotBlank()) { Text("Simpan") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Batal") } },
-    )
 }

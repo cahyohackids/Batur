@@ -1,11 +1,9 @@
 package com.cahyo.batur.agent
 
 import android.os.SystemClock
-import com.cahyo.batur.data.prefs.SettingsStore
 import com.cahyo.batur.data.remote.AgentRequest
-import com.cahyo.batur.data.remote.ApiClient
 import com.cahyo.batur.data.remote.FunctionCall
-import com.cahyo.batur.data.remote.apiCall
+import com.cahyo.batur.data.repository.DeviceRepository
 
 /** Hasil "otak" agent: memilih skill (tool_call) atau menjawab biasa (text). */
 data class EngineOutput(
@@ -25,15 +23,11 @@ interface AgentEngine {
 }
 
 /** Mode cloud: POST /api/agent/cloud. Server memakai gateway, atau parser aturan kalau gateway mati. */
-class CloudAgentEngine(
-    private val client: ApiClient,
-    private val settings: SettingsStore,
-) : AgentEngine {
+class CloudAgentEngine(private val device: DeviceRepository) : AgentEngine {
 
     override suspend fun run(command: String): Result<EngineOutput> {
-        val deviceId = settings.deviceId()
         val start = SystemClock.elapsedRealtime()
-        return apiCall { client.api().runCloudAgent(AgentRequest(command, deviceId)) }.map { r ->
+        return device.authed { runCloudAgent(AgentRequest(command)) }.map { r ->
             EngineOutput(
                 mode = r.mode,
                 modelSlug = if (r.mode == "cloud") CLOUD_MODEL_SLUG else null,

@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.AlarmClock
 import android.provider.CalendarContract
+import com.cahyo.batur.data.repository.NoteOutcome
 import com.google.gson.JsonObject
 import java.time.LocalDate
 import java.time.LocalTime
@@ -166,10 +167,15 @@ object NoteExecutor : SkillExecutor {
             icon = "note",
             mechanism = "POST /api/notes",
         ) { ctx ->
-            ctx.noteRepository.createNote(content).fold(
-                onSuccess = { ExecResult(true, "Catatan tersimpan: \"$content\"", "POST /api/notes") },
-                onFailure = { ExecResult(false, "Catatan gagal disimpan: ${it.message}", "POST /api/notes") },
-            )
+            when (val outcome = ctx.noteRepository.save(content)) {
+                is NoteOutcome.Saved -> ExecResult(true, "Catatan tersimpan: \"$content\"", "POST /api/notes")
+                NoteOutcome.Queued -> ExecResult(
+                    true,
+                    "Catatan disimpan di ponsel, dikirim saat online: \"$content\"",
+                    "Antrean lokal → POST /api/notes",
+                )
+                is NoteOutcome.Failed -> ExecResult(false, "Catatan gagal disimpan: ${outcome.message}", "POST /api/notes")
+            }
         }
     }
 

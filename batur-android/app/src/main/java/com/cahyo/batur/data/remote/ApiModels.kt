@@ -4,12 +4,14 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.annotations.SerializedName
 
-// Format respons Batur API: { success, data, meta? } atau { success: false, message }
+// Format respons Batur API: { success, data, meta? } atau { success: false, message, code? }
 data class ApiResponse<T>(
     val success: Boolean,
     val data: T?,
     val message: String?,
     val meta: PageMeta?,
+    /** unauthorized | rate_limited | quota_exceeded | validation */
+    val code: String? = null,
 )
 
 data class PageMeta(
@@ -41,7 +43,8 @@ data class SkillDetail(
     val category: String,
     val icon: String,
     @SerializedName("function_name") val functionName: String,
-    val parameters: JsonObject?,
+    // JsonElement, bukan JsonObject: Gson gagal membaca `null` ke field JsonObject.
+    val parameters: JsonElement?,
     @SerializedName("example_commands") val exampleCommands: List<String>?,
     @SerializedName("android_action") val androidAction: String?,
     val permissions: List<String>?,
@@ -67,7 +70,7 @@ data class ToolDefinition(
 data class ToolFunction(
     val name: String,
     val description: String,
-    val parameters: JsonObject?,
+    val parameters: JsonElement?,
 )
 
 // ---------- Models ----------
@@ -91,7 +94,6 @@ data class ModelDetail(
     val type: String,
     val provider: String,
     val runtime: String,
-    @SerializedName("gateway_model") val gatewayModel: String?,
     @SerializedName("size_label") val sizeLabel: String?,
     @SerializedName("ram_label") val ramLabel: String?,
     @SerializedName("supports_tools") val supportsTools: Boolean,
@@ -151,13 +153,17 @@ data class TaskStats(
 
 data class FunctionCall(
     val name: String,
-    val arguments: JsonObject?,
-)
+    val arguments: JsonElement?,
+) {
+    /** Argumen sebagai objek; null kalau server mengirim null atau bentuk lain. */
+    val args: JsonObject? get() = arguments.asObjectOrNull()
+}
+
+fun JsonElement?.asObjectOrNull(): JsonObject? = this?.takeIf { it.isJsonObject }?.asJsonObject
 
 data class StepRequest(val type: String, val content: String)
 
 data class CreateTaskRequest(
-    @SerializedName("device_id") val deviceId: String,
     val command: String,
     val mode: String,
     @SerializedName("model_slug") val modelSlug: String?,
@@ -167,6 +173,8 @@ data class CreateTaskRequest(
     @SerializedName("result_text") val resultText: String?,
     @SerializedName("latency_ms") val latencyMs: Int?,
     val steps: List<StepRequest>,
+    /** UUID buatan ponsel; server mengembalikan baris yang sama kalau dikirim ulang dari antrean. */
+    @SerializedName("client_id") val clientId: String? = null,
 )
 
 data class CreatedTask(val id: Int)
@@ -183,17 +191,14 @@ data class Note(
 )
 
 data class CreateNoteRequest(
-    @SerializedName("device_id") val deviceId: String,
     val content: String,
     @SerializedName("task_id") val taskId: Int?,
+    @SerializedName("client_id") val clientId: String?,
 )
 
 // ---------- Agent ----------
 
-data class AgentRequest(
-    val command: String,
-    @SerializedName("device_id") val deviceId: String,
-)
+data class AgentRequest(val command: String)
 
 data class AgentResult(
     val mode: String,
@@ -204,7 +209,27 @@ data class AgentResult(
     @SerializedName("latency_ms") val latencyMs: Int,
 )
 
+// ---------- Perangkat & versi ----------
+
+data class RegisteredDevice(
+    @SerializedName("device_id") val deviceId: String,
+    val token: String,
+)
+
+data class AppVersion(
+    @SerializedName("version_code") val versionCode: Int,
+    @SerializedName("version_name") val versionName: String,
+    @SerializedName("apk_url") val apkUrl: String?,
+    val notes: String?,
+)
+
 data class HealthStatus(
     val status: String,
     @SerializedName("db_time") val dbTime: String?,
+)
+
+/** POST /api/tts. voice: "perempuan" atau "laki-laki". */
+data class SpeechRequest(
+    val text: String,
+    val voice: String,
 )

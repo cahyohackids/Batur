@@ -22,8 +22,8 @@ android {
         applicationId = "com.cahyo.batur"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
 
         // LiteRT-LM membawa library native arm64 dan x86_64. Ponsel Android modern dan
         // emulator di Mac Apple Silicon sama-sama arm64, jadi x86_64 dibuang (APK ±26 MB lebih kecil).
@@ -42,7 +42,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            // 10.0.2.2 = localhost laptop dilihat dari emulator Android.
+            buildConfigField("String", "BASE_URL", "\"http://10.0.2.2:3000/\"")
+        }
         release {
+            buildConfigField("String", "BASE_URL", "\"https://batur.ezkielyna.store/\"")
             signingConfigs.findByName("release")?.let { signingConfig = it }
             // R8 dimatikan: Gson (DTO Retrofit) dan LiteRT-LM memakai refleksi/JNI yang mudah rusak kalau di-obfuscate.
             optimization {
